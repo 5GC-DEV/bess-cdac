@@ -40,7 +40,7 @@ import subprocess
 import sys
 import time
 
-TARGET_REPO = 'docker pull docker.io/ajeeshcazelabs/bess_build'
+TARGET_REPO = 'ghcr.io/ios-mcn-core/bess_build'
 
 imgs = {
     'focal64': {'base': 'ubuntu:focal', 'tag_suffix': ''},

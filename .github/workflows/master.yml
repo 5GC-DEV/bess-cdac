@@ -64,7 +64,7 @@ jobs:
           ignore: DL3008
 
   hadolint-cndp:
-    name: hadolint
+    name: hadolint-cndp
     runs-on: ubuntu-latest
 
     steps:
@@ -93,15 +93,18 @@ jobs:
       - uses: actions/checkout@v4
   build:
     runs-on: ubuntu-20.04
+    env:
+      REGISTRY: ghcr.io
+      DOCKER_REGISTRY: ghcr.io/
+      DOCKER_REPOSITORY: ios-mcn-core/
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/login-action@v3.0.0
+      - uses: docker/login-action@v3.1.0
         with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERUSER }}
-          password: ${{ secrets.DOCKERPASS }}
-
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GHCRUSER }}
+          password: ${{ secrets.GHCRPASS }}
       - name: Build and push new BESS base image
         run: yes y | ./env/rebuild_images.py focal64
 
