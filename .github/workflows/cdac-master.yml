@@ -117,8 +117,5 @@ jobs:
           username: ${{ secrets.DCKRUSER }}
           password: ${{ secrets.DCKRPASS }}
 
-      - name: Set TARGET_REPO
-        run: echo "TARGET_REPO=docker.io/cdac5gc/bess_build" >> $GITHUB_ENV
-
       - name: Build and push new BESS base image
-        run: yes y | ./env/rebuild_images.py focal64
+        run: yes y | ./env/rebuild_images_cdac.py focal64

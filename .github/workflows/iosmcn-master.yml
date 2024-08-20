@@ -95,6 +95,12 @@ jobs:
     if: github.repository_owner == 'ios-mcn-core'
     steps:
       - uses: actions/checkout@v4
+
+      - name: FOSSA scan
+        uses: fossa-contrib/fossa-action@v3
+        with:
+          fossa-api-key: 0c3bbcdf20e157bbd487dae173751b28
+
   build:
     runs-on: ubuntu-20.04
     if: github.repository_owner == 'ios-mcn-core'
@@ -110,10 +116,6 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.GHCRUSER }}
           password: ${{ secrets.GHCRPASS }}
-      - name: Build and push new BESS base image
-        run: yes y | ./env/rebuild_images.py focal64
 
-      - name: FOSSA scan
-        uses: fossa-contrib/fossa-action@v3
-        with:
-          fossa-api-key: 0c3bbcdf20e157bbd487dae173751b28
+      - name: Build and push new BESS base image
+        run: yes y | ./env/rebuild_images_iosmcn.py focal64
