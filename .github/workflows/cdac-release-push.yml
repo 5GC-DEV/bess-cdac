@@ -15,25 +15,33 @@ jobs:
       REGISTRY: docker.io
       DOCKER_REGISTRY: docker.io/
       DOCKER_REPOSITORY: cdac5gc/
-      RELEASE_VERSION: 0.0.1
-      
+      RELEASE_VERSION: 0.0.6
+      STABLE_TAG: 240828
+      IMAGE_NAME: bess_build
+
     steps:
+      # Checkout the repository
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-
-      - run: echo GIT_SHA_SHORT=$(git rev-parse --short HEAD) >> $GITHUB_ENV
-
-      - uses: docker/login-action@v3
+      # Log in to Docker Hub using specific username and password from secrets
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3.1.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.DCKRUSER }}
           password: ${{ secrets.DCKRPASS }}
-      
-      - name: Clean Checksum
-        run: go mod tidy
 
-      - name: Build and push new BESS base image
-        run: yes y | ./env/rebuild_images.py focal64
+      # Pull the existing image from Docker Hub
+      - name: Pull existing image
+        run: |
+          docker pull ${{ env.DOCKER_REGISTRY }}${{ env.DOCKER_REPOSITORY }}${{ env.IMAGE_NAME }}:${{ env.STABLE_TAG }}
+
+      # Tag the image with the new release version
+      - name: Tag the image with the release version
+        run: |
+          docker tag ${{ env.DOCKER_REGISTRY }}${{ env.DOCKER_REPOSITORY }}${{ env.IMAGE_NAME }}:${{ env.STABLE_TAG }} ${{ env.DOCKER_REGISTRY }}${{ env.DOCKER_REPOSITORY }}${{ env.IMAGE_NAME }}:release-${{ env.RELEASE_VERSION }}
+
+      # Push the newly tagged image to Docker Hub
+      - name: Push the new image tag
+        run: |
+          docker push ${{ env.DOCKER_REGISTRY }}${{ env.DOCKER_REPOSITORY }}${{ env.IMAGE_NAME }}:release-${{ env.RELEASE_VERSION }}
