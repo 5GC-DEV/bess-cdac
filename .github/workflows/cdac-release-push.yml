@@ -15,8 +15,8 @@ jobs:
       REGISTRY: docker.io
       DOCKER_REGISTRY: docker.io/
       DOCKER_REPOSITORY: cdac5gc/
-      RELEASE_VERSION: 0.0.6
-      STABLE_TAG: 240828
+      RELEASE_VERSION: 0.0.7
+      STABLE_TAG: 240925
       IMAGE_NAME: bess_build
 
     steps:
