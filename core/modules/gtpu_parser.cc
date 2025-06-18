@@ -20,7 +20,6 @@ using bess::utils::Gtpv1;
 using bess::utils::Ipv4;
 using bess::utils::Tcp;
 using bess::utils::Udp;
-#define IPPROTO_ESP 50
 
 enum { DEFAULT_GATE = 0, FORWARD_GATE };
 /*----------------------------------------------------------------------------------*/
@@ -108,7 +107,7 @@ void GtpuParser::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
                               (be16_t *)&_const_val, (be32_t *)&_const_val,
                               (be32_t *)&_const_val, &iph->protocol, p);
       } break;
-      case IPPROTO_ESP:
+      case Ipv4::kEsp
         set_gtp_parsing_attrs(&iph->src, &iph->dst, (be16_t *)&_const_val,
                               (be16_t *)&_const_val, (be32_t *)&_const_val,
                               (be32_t *)&_const_val, &iph->protocol, p);
