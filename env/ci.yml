@@ -22,5 +22,10 @@
           - g++
           - clang
           - ccache
+          - linux-headers-generic
+          - build-essential
         update_cache: yes
       become: true
+
+
+
