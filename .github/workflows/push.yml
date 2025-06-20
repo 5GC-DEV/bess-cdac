@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2024-Present Intel Corporation
-
-name: Build and Push image
+# Copyright 2025 Canonical Ltd.
 on:
   push:
     branches:
-      - master
+      - main
 
 jobs:
   build:
