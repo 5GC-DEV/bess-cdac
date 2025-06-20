@@ -67,7 +67,7 @@ except ImportError:
 CONF_EXT = 'bess'
 
 
-# errors in configuration file.
+# errors in configuration file
 class ConfError(Exception):
     pass
 
