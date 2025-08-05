@@ -1,6 +1,5 @@
 // Copyright (c) 2014-2016, The Regents of the University of California.
 // Copyright (c) 2016-2017, Nefeli Networks, Inc.
-// Copyright 2025 Canonical Ltd.
 // All rights reserved.
 //
 // SPDX-License-Identifier: BSD-3-Clause
@@ -427,10 +426,8 @@ class ExactMatchTable {
     }
 
     if (mt_attr_name.length() > 0) {
-      if (m != nullptr) {
-        f->attr_id = m->AddMetadataAttr(mt_attr_name, f->size,
-                                        metadata::Attribute::AccessMode::kRead);
-      }
+      f->attr_id = m->AddMetadataAttr(mt_attr_name, f->size,
+                                      metadata::Attribute::AccessMode::kRead);
       if (f->attr_id < 0) {
         return MakeError(-f->attr_id,
                          Format("idx %d: add_metadata_attr() failed", idx));

@@ -44,7 +44,6 @@ TARGET_REPO = 'ghcr.io/ios-mcn-core/bess_build'
 
 imgs = {
     'focal64': {'base': 'ubuntu:focal', 'tag_suffix': ''},
-    'jammy64': {'base': 'ubuntu:jammy', 'tag_suffix': ''},
 }
 
 
