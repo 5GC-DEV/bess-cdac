@@ -1,6 +1,5 @@
 // Copyright (c) 2014-2016, The Regents of the University of California.
 // Copyright (c) 2016-2017, Nefeli Networks, Inc.
-// Copyright 2025 Canonical Ltd.
 // All rights reserved.
 //
 // SPDX-License-Identifier: BSD-3-Clause
@@ -257,6 +256,10 @@ static inline bool VerifyIpv4Checksum(const Ipv4 &iph) {
   const uint32_t *buf32 = reinterpret_cast<const uint32_t *>(&iph);
   size_t ip_header_len = iph.header_length << 2;
 
+  if (likely(ip_header_len == sizeof(iph))) {
+    return VerifyIpv4NoOptChecksum(iph);
+  }
+
   if (unlikely(ip_header_len < sizeof(iph))) {
     return false;  // Invalid IP header
   }
@@ -286,6 +289,10 @@ static inline bool VerifyIpv4Checksum(const Ipv4 &iph) {
 static inline uint16_t CalculateIpv4Checksum(const Ipv4 &iph) {
   const uint32_t *buf32 = reinterpret_cast<const uint32_t *>(&iph);
   size_t ip_header_len = iph.header_length << 2;
+
+  if (likely(ip_header_len == sizeof(iph))) {
+    return CalculateIpv4NoOptChecksum(iph);
+  }
 
   if (unlikely(ip_header_len < sizeof(iph))) {
     return 0;  // Invalid IP header. Give up.

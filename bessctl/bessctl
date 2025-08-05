@@ -165,7 +165,7 @@ def run_cli(instream=sys.stdin):
     if cli.stop_loop:
         if cli.last_cmd:
             cli.ferr.write('  Command failed: %s\n' % cli.last_cmd)
-        os._exit(1)
+        sys.exit(1)
 
 
 def main():

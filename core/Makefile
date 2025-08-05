@@ -1,7 +1,6 @@
 # Copyright (c) 2014-2017, The Regents of the University of California.
 # Copyright (c) 2016-2017, Nefeli Networks, Inc.
 # Copyright (c) 2020-2022 Intel Corporation.
-# Copyright 2025 Canonical Ltd.
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
@@ -68,13 +67,13 @@ HAS_PKG_CONFIG := $(shell command -v $(PKG_CONFIG) 2>&1 >/dev/null && echo yes |
 
 # We always want these libraries to be dynamically linked even when the
 # user requests a static build.
-ALWAYS_DYN_LIBS := -lpcap -lpthread -ldl -lgrpc++
+ALWAYS_DYN_LIBS := -lpthread -ldl
 # These libraries are not supported by pkg-config.
-ALWAYS_LIBS := -lgflags -lnuma
+ALWAYS_LIBS := -lpcap -lgflags -lnuma
 # If pkg-config is available, we just need a list of the dependecies.
-PKG_CONFIG_DEPS := libdpdk libglog protobuf libcndp
+PKG_CONFIG_DEPS := libdpdk libglog protobuf grpc++ libunwind zlib libcndp
 # If pkg-config is not available, we need to list the libs we depend on.
-NO_PKG_CONFIG_LIBS := -lglog -lgflags -lprotobuf
+NO_PKG_CONFIG_LIBS := -lglog -lgflags -lprotobuf -lgrpc++ -lunwind -lz
 # If pkg-config is not available and we're static linking, we also need
 # the indirect dependecies.  This is annoying, because they may change
 # in future versions.
