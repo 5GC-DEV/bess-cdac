@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 coverage
-grpcio==1.74.1
+grpcio==1.74.0
 protobuf==3.20.3
 pyroute2==0.9.4
 scapy
