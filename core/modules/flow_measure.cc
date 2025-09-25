@@ -205,7 +205,7 @@ CommandResponse FlowMeasure::CommandReadStats(
   while (ret = rte_hash_iterate(current_hash, &key, &data, &next), ret >= 0) {
     const TableKey *table_key = reinterpret_cast<const TableKey *>(key);
     // const SessionStats &session_stat = current_data->at(ret);
-    SessionStats *session_stat = reinterpret_cast<SessionStats *>(data);  
+    SessionStats *session_stat = reinterpret_cast<SessionStats *>(data);
     const std::lock_guard<std::mutex> lock(session_stat.mutex);
     const std::vector<double> lat_percs(arg.latency_percentiles().begin(),
                                         arg.latency_percentiles().end());
