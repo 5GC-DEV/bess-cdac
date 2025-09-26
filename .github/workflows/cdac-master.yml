@@ -102,19 +102,19 @@ jobs:
           fossa-api-key: 0c3bbcdf20e157bbd487dae173751b28
 
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     if: github.repository_owner == '5GC-DEV'
     env:
       REGISTRY: docker.io
       DOCKER_REGISTRY: docker.io/
       DOCKER_REPOSITORY: cdac5gc/
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set permissions for rebuild_images_cdac.py
         run: chmod +x ./env/rebuild_images_cdac.py
 
-      - uses: docker/login-action@v3.1.0
+      - uses: docker/login-action@v3.5.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.DCKRUSER }}
