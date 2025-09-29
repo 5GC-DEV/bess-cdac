@@ -29,10 +29,10 @@ jobs:
           - check: 'sample_plugin/protobuf'
             exclude: ''       # Nothing to exclude
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Clang-format check
-      uses: jidicula/clang-format-action@v4.11.0
+      uses: jidicula/clang-format-action@v4.15.0
       with:
         clang-format-version: '12'
         check-path: ${{ matrix.path['check'] }}
@@ -46,7 +46,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Check Spelling
-        uses: rojopolis/spellcheck-github-actions@0.36.0
+        uses: rojopolis/spellcheck-github-actions@0.52.0
         with:
           config_path: .spellcheck.yml
           task_name: Markdown
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Dockerfile linter
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@v3.2.0
         # For now, ignoring:
         # DL3008 warning: Pin versions in apt get install (e.g., apt-get install <package>=<version>)
         with:
@@ -74,7 +74,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Dockerfile linter
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@v3.2.0
         # For now, ignoring:
         # DL3008 warning: Pin versions in apt get install (e.g., apt-get install <package>=<version>); and
         # DL3013 warning: Pin versions in pip (e.g., pip install <package>==<version>)
@@ -86,15 +86,15 @@ jobs:
     runs-on: ubuntu-latest
     if: github.repository_owner == '5GC-DEV'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: reuse lint
-        uses: fsfe/reuse-action@v3
+        uses: fsfe/reuse-action@v5
 
   fossa-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: FOSSA scan
         uses: fossa-contrib/fossa-action@v3
