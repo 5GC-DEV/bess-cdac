@@ -121,4 +121,4 @@ jobs:
           password: ${{ secrets.DCKRPASS }}
 
       - name: Build and push new BESS base image
-        run: yes y | ./env/rebuild_images_cdac.py focal64
+        run: yes y | ./env/rebuild_images_cdac.py jammy64
