@@ -55,9 +55,9 @@ import "util_msg.proto";
 
 // Represents an empty argument for commands that take no parameters.
 /* 
-     NOTE: This message is intentionally empty.
-     It is used for commands that do not require any arguments.
-     Keeping this message allows consistent RPC method signatures.
+     // NOTE: This message is intentionally empty.
+     // It is used for commands that do not require any arguments.
+     // Keeping this message allows consistent RPC method signatures.
   */
 message EmptyArg {}
 
