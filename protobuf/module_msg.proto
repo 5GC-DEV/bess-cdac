@@ -53,13 +53,27 @@ import "util_msg.proto";
 /// function is called on modules in bessd. This file lists all modules, their
 /// initialization parameters and any functions that may be called on them.
 
-message EmptyArg {}
+// Represents an empty argument for commands that take no parameters.
+message EmptyArg {
+  /* 
+     NOTE: This message is intentionally empty.
+     It is used for commands that do not require any arguments.
+     Keeping this message allows consistent RPC method signatures.
+  */
+}
 
 /**
  * The BPF module has a command `clear()` that takes no parameters.
  * This command removes all filters from the module.
  */
-message BPFCommandClearArg {}
+message BPFCommandClearArg {
+  /*
+     NOTE: Intentionally empty because the `clear()` command
+     does not require any input arguments.
+     Defined for API consistency and potential future extensions.
+  */
+}
+
 
 /**
  * The ExactMatch module has a command `add(...)` that takes two parameters.
@@ -88,7 +102,11 @@ message ExactMatchCommandDeleteArg {
  * The ExactMatch module has a command `clear()` which takes no parameters.
  * This command removes all rules from the ExactMatch module.
  */
-message ExactMatchCommandClearArg {}
+message ExactMatchCommandClearArg {
+  // Intentionally left empty — this message acts as a signal for the
+  // ExactMatch::CommandClear() handler in the BESS module (C++ side).
+  // No fields are required because the clear() operation has no parameters.
+}
 
 /**
  * The ExactMatch module has a command `set_default_gate(...)` which takes one
@@ -159,7 +177,13 @@ message IPLookupCommandDeleteArg {
  * This function removes all rules in the IPLookup table.
  * Example use in bessctl: `myiplookuptable.clear()`
  */
-message IPLookupCommandClearArg {}
+message IPLookupCommandClearArg {
+/**
+ * The message is intentionally left empty because the `clear()` command
+ * does not require any input arguments — it only triggers the cleanup
+ * action inside the IPLookup module of the UPF data plane.
+ */
+}
 
 /**
  * The L2Forward module forwards traffic via exact match over the Ethernet
@@ -347,8 +371,16 @@ message QueueCommandSetSizeArg {
 /**
  * Modules that are queues or contain queues may contain functions
  * `get_status()` that return QueueCommandGetStatusResponse.
+ *
+ * This command is used by the control plane (UPF)
+ * to query runtime queue metrics such as packet count, backlog,
+ * occupancy, and drop statistics from the data plane (BESS).
  */
-message QueueCommandGetStatusArg {}
+message QueueCommandGetStatusArg {
+  // Intentionally left empty because `get_status()` does not
+  // require any input parameters — it only triggers a query
+  // for the current status of the queue module.
+}
 
 /**
  * Modules that are queues or contain queues may contain functions
@@ -367,19 +399,36 @@ message QueueCommandGetStatusResponse {
  * The function `clear()` for RandomUpdate takes no parameters and clears all
  * state in the module.
  */
-message RandomUpdateCommandClearArg {}
+message RandomUpdateCommandClearArg {
+  // Intentionally left empty because the `clear()` command does not require
+  // any input parameters. In the 5G UPF data plane, this message is used
+  // by the control plane to trigger a state reset in the RandomUpdate
+  // module via BESS, effectively clearing all stored update entries or
+  // internal state maintained by that module.
+}
 
 /**
  * The function `clear()` for Rewrite takes no parameters and clears all state
  * in the module.
  */
-message RewriteCommandClearArg {}
+message RewriteCommandClearArg {
+   // Intentionally left empty because the `clear()` command does not require
+  // any input parameters. In a 5G UPF data plane context, this message is used
+  // by the control plane to instruct the Rewrite module (via BESS) to remove
+  // all rewrite rules or state entries currently applied to packet processing.
+}
 
 /**
  * The function `clear()` for Update takes no parameters and clears all state in
  * the module.
  */
-message UpdateCommandClearArg {}
+message UpdateCommandClearArg {
+  // Intentionally left empty because the `clear()` command does not require
+  // any input parameters. In the 5G UPF data plane, this command is triggered
+  // by the control plane to signal the Update module to reset or purge all
+  // internal state, ensuring that previously applied update rules or contexts
+  // are cleared from the BESS pipeline.
+}
 
 /**
  * The module WildcardMatch has a command `add(...)` which inserts a new rule
@@ -413,7 +462,14 @@ message WildcardMatchCommandDeleteArg {
  * all state in the WildcardMatch module (is equivalent to calling delete for
  * all rules)
  */
-message WildcardMatchCommandClearArg {}
+message WildcardMatchCommandClearArg {
+  // Intentionally left empty because the `clear()` command does not require
+  // any input parameters. In the 5G UPF data plane context, this message is used
+  // by the control plane (SMF or PFCP agent) to instruct the WildcardMatch
+  // module in BESS to remove all flow-matching rules or table entries. This ensures
+  // that all session or forwarding rules tied to the module are cleared, effectively
+  // resetting the module’s match-action state.
+}
 
 /**
  * For traffic which does not match any rule in the WildcardMatch module,
@@ -482,7 +538,17 @@ message BPFArg {
  * __Input Gates__: 1
  * __Output Gates__: 1
  */
-message BufferArg {}
+message BufferArg {
+   // This message intentionally has no fields because the Buffer module does not
+  // require any configuration parameters during initialization.
+  //
+  // In the 5G UPF (User Plane Function) context, the Buffer module acts as a
+  // packet queue or holding point within the BESS pipeline. It temporarily
+  // stores packets until a full batch is ready to be processed or forwarded.
+  // This helps manage bursty traffic, maintain throughput, and control flow
+  // between pipeline stages such as classifiers, encapsulators, or PDR/FAR
+  // handlers.
+}
 
 /**
  * The Bypass module forwards packets by emulating pre-defined packet processing
@@ -521,7 +587,14 @@ message DumpArg {
  * __Input Gates__: 1
  * __Output Gates__: 1
  */
-message EtherEncapArg {}
+message EtherEncapArg {
+  // Intentionally left empty because this module relies on packet metadata
+  // rather than explicit arguments. In a 5G UPF context, EtherEncap is used to
+  // encapsulate user-plane traffic with Ethernet headers before forwarding to
+  // lower network layers (e.g., N3 or N6 interfaces). The MAC source and
+  // destination fields are populated dynamically from metadata generated by
+  // preceding modules in the BESS pipeline.
+}
 
 /**
  * The ExactMatch module splits packets along output gates according to exact
@@ -666,7 +739,18 @@ message HashLBArg {
  * __Input Gates__: 1
  * __Output Gates__: 1
  */
-message IPEncapArg {}
+message IPEncapArg {
+  // Intentionally left empty because the IPEncap module obtains all required
+  // encapsulation parameters (such as source/destination IP, protocol, and
+  // next-hop) from metadata attached to each packet.
+  //
+  // In a 5G User Plane Function (UPF) context, this module is used during
+  // packet forwarding to encapsulate uplink or downlink traffic with an
+  // appropriate IP header based on session or PDR (Packet Detection Rule)
+  // information provided by the control plane (SMF). The metadata values like
+  // `ip_src`, `ip_dst`, and `ip_proto` are dynamically filled per packet and
+  // therefore do not require static configuration via this message.
+}
 
 /**
  * An IPLookup module perfroms LPM lookups over a packet destination.
@@ -704,7 +788,13 @@ message L2ForwardArg {
  * __Input Gates__: 1
  * __Output Gates__: 1
  */
-message MACSwapArg {}
+message MACSwapArg {
+  // Intentionally left empty because the MACSwap module does not require
+  // any configuration parameters. In a 5G UPF data plane pipeline, this module
+  // is used to swap the source and destination MAC addresses of packets during
+  // forwarding between interfaces (e.g., N3 ↔ N6). The operation is stateless
+  // and controlled by the pipeline configuration, so no arguments are needed.
+}
 
 /**
  * The measure module tracks latencies, packets per second, and other
@@ -740,7 +830,13 @@ message MeasureArg {
  * __Input Gates__: many (configurable)
  * __Output Gates__: 1
  */
-message MergeArg {}
+message MergeArg {
+  // Intentionally left empty because the Merge module does not require
+  // any configuration parameters. In a 5G User Plane Function (UPF) context,
+  // this module is used to combine multiple packet flows — for example,
+  // traffic from different uplink/downlink paths or slices — into a single
+  // unified output stream for further processing in the BESS pipeline.
+}
 
 /**
  * The MetadataTest module is used for internal testing purposes.
@@ -816,7 +912,13 @@ message StaticNATArg {
 /**
  * This module is used for testing purposes.
  */
-message NoOpArg {}
+message NoOpArg {
+  // This message intentionally has no fields because the NoOp (No Operation)
+  // command is used only as a placeholder or test message in the 5G UPF context.
+  // In a 5G system, it may be sent from the control plane to verify connectivity
+  // or message flow between PFCP (SMF) and the user plane (UPF/BESS) without
+  // affecting any actual packet processing or session state.
+}
 
 /**
  * The PortInc module connects a physical or virtual port and releases
