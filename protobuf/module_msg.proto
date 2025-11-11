@@ -54,13 +54,12 @@ import "util_msg.proto";
 /// initialization parameters and any functions that may be called on them.
 
 // Represents an empty argument for commands that take no parameters.
-message EmptyArg {
-  /* 
+/* 
      NOTE: This message is intentionally empty.
      It is used for commands that do not require any arguments.
      Keeping this message allows consistent RPC method signatures.
   */
-}
+message EmptyArg {}
 
 /**
  * The BPF module has a command `clear()` that takes no parameters.
