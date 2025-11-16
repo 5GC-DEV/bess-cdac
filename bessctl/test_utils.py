@@ -32,6 +32,7 @@
 from __future__ import print_function
 
 import codecs
+import errno
 import os
 import random
 import scapy.all as scapy
@@ -46,7 +47,7 @@ try:
     this_dir = os.path.dirname(os.path.realpath(__file__))
     bessctl = os.path.join(this_dir, 'bessctl')
     sys.path.insert(1, os.path.join(this_dir, '../../../'))
-    from pybess.bess import *
+    from pybess.bess import BESS, CommandError
 except ImportError:
     print('Cannot import the API module (pybess)', file=sys.stderr)
     raise
@@ -73,7 +74,7 @@ def measure_tc_perf(bess, duration):
         raise Exception('Fail to find root tc')
 
     old = bess.get_tc_stats(root_tc.name)
-    time.sleep(duration)
+    sleep(duration)
     new = bess.get_tc_stats(root_tc.name)
 
     sec_diff = new.timestamp - old.timestamp
@@ -235,7 +236,7 @@ class BessModuleTestCase(unittest.TestCase):
 
         # running tests
         self.bess.resume_all()
-        time.sleep(duration)
+        sleep(duration)
         self.bess.pause_all()
 
     def run_pipeline(self, src_module, dst_module, igate, input_pkts,
@@ -311,7 +312,7 @@ class BessModuleTestCase(unittest.TestCase):
             cur = self.bess.get_tc_stats(root_tc.name)
             if cur.packets - last.packets >= len(input_pkts):
                 break
-            time.sleep(0.1)
+            sleep(0.1)
             duration += 0.1
 
         out_pkts = self._collect_output(ogates, proto)

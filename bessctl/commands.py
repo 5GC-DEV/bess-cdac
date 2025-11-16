@@ -56,8 +56,8 @@ import sugar
 try:
     this_dir = os.path.dirname(os.path.realpath(__file__))
     sys.path.insert(1, os.path.join(this_dir, '..'))
-    from pybess.module import *
-    from pybess.port import *
+    from pybess.module import Module
+    from pybess.port import Port
 except ImportError:
     print('Cannot import the API module (pybess)', file=sys.stderr)
     raise
@@ -214,51 +214,49 @@ def get_var_attrs(cli, var_token, partial_word):
         elif var_token == 'WORKER_ID':
             var_type = 'int'
             try:
-                var_candidates = [str(m.wid) for m in
-                                  cli.bess.list_workers().workers_status]
-            except:
-                pass
+                var_candidates = [str(m.wid) for m in cli.bess.list_workers().workers_status]
+            except (AttributeError, OSError, RuntimeError):
+                raise  # re-raise the exception instead of fallback
 
         elif var_token == 'WORKER_ID...':
             var_type = 'wid+'
             var_desc = 'one or more worker IDs'
             try:
-                var_candidates = [str(m.wid) for m in
-                                  cli.bess.list_workers().workers_status]
-            except:
-                pass
+                var_candidates = [str(m.wid) for m in cli.bess.list_workers().workers_status]
+            except (AttributeError, OSError, RuntimeError):
+                raise
 
         elif var_token == 'DRIVER':
             var_type = 'name'
             var_desc = 'name of a port driver'
             try:
                 var_candidates = cli.bess.list_drivers().driver_names
-            except:
-                pass
+            except (AttributeError, OSError, RuntimeError):
+                raise
 
         elif var_token == 'DRIVER...':
             var_type = 'name+'
             var_desc = 'one or more port driver names'
             try:
                 var_candidates = cli.bess.list_drivers().driver_names
-            except:
-                pass
+            except (AttributeError, OSError, RuntimeError):
+                raise
 
         elif var_token == 'MCLASS':
             var_type = 'name'
             var_desc = 'name of a module class'
             try:
                 var_candidates = cli.bess.list_mclasses().names
-            except:
-                pass
+            except (AttributeError, OSError, RuntimeError):
+                raise
 
         elif var_token == 'MCLASS...':
             var_type = 'name+'
             var_desc = 'one or more module class names'
             try:
                 var_candidates = cli.bess.list_mclasses().names
-            except:
-                pass
+            except (AttributeError, OSError, RuntimeError):
+                raise
 
         elif var_token == '[NEW_MODULE]':
             var_type = 'name'
@@ -268,29 +266,25 @@ def get_var_attrs(cli, var_token, partial_word):
             var_type = 'name'
             var_desc = 'name of an existing module instance'
             try:
-                var_candidates = [m.name for m in
-                                  cli.bess.list_modules().modules]
-            except:
-                pass
+                var_candidates = [m.name for m in cli.bess.list_modules().modules]
+            except (AttributeError, OSError, RuntimeError):
+                raise
 
         elif var_token == '[MODULE]':
             var_type = 'name'
             var_desc = 'name of an existing module instance (* means all)'
             var_candidates = ['*']
             try:
-                var_candidates += [m.name for m in
-                                   cli.bess.list_modules().modules]
-            except:
-                pass
-
+                var_candidates += [m.name for m in cli.bess.list_modules().modules]
+            except (AttributeError, OSError, RuntimeError):
+                raise
         elif var_token == 'MODULE...':
             var_type = 'name+'
             var_desc = 'one or more module names'
             try:
-                var_candidates = [m.name for m in
-                                  cli.bess.list_modules().modules]
-            except:
-                pass
+                var_candidates = [m.name for m in cli.bess.list_modules().modules]
+            except (AttributeError, OSError, RuntimeError):
+                raise
 
         elif var_token == 'MODULE_CMD':
             var_type = 'name'
@@ -314,25 +308,24 @@ def get_var_attrs(cli, var_token, partial_word):
             var_desc = 'name of a port'
             try:
                 var_candidates = [p.name for p in cli.bess.list_ports().ports]
-            except:
-                pass
+            except (AttributeError, OSError, RuntimeError):
+                raise
 
         elif var_token == 'PORT...':
             var_type = 'name+'
             var_desc = 'one or more port names'
             try:
                 var_candidates = [p.name for p in cli.bess.list_ports().ports]
-            except:
-                pass
+            except (AttributeError, OSError, RuntimeError):
+                raise
 
         elif var_token == 'TC...':
             var_type = 'name+'
             var_desc = 'one or more traffic class names'
             try:
-                var_candidates = [getattr(c, 'class').name
-                                  for c in cli.bess.list_tcs().classes_status]
-            except:
-                pass
+                var_candidates = [getattr(c, 'class').name for c in cli.bess.list_tcs().classes_status]
+            except (AttributeError, OSError, RuntimeError):
+                raise  # re-raise the exception instead of silently passing
 
         elif var_token == 'CONF':
             var_type = 'confname'
@@ -374,16 +367,16 @@ def get_var_attrs(cli, var_token, partial_word):
             var_desc = 'name of a gatehook class'
             try:
                 var_candidates = cli.bess.list_gatehook_classes().names
-            except:
-                pass
+            except (AttributeError, OSError, RuntimeError):
+                raise  # re-raise the exception instead of silently passing
 
         elif var_token == 'GATEHOOKCLASS...':
             var_type = 'name+'
             var_desc = 'one or more gatehook class names'
             try:
                 var_candidates = cli.bess.list_gatehook_classes().names
-            except:
-                pass
+            except (AttributeError, OSError, RuntimeError):
+                raise  # re-raise the exception instead of silently passing
 
         elif var_token == 'GATEHOOK':
             var_type = 'name'
@@ -572,10 +565,11 @@ def bind_var(cli, var_type, line):
                 val = None
             else:
                 val = eval(head)
-        except:
+        except (SyntaxError, NameError, TypeError, ValueError) as e:
             raise cli.BindError(
-                '"pyobj" should be an object in python syntax'
-                ' (e.g., 42, "foo", ["hello", "world"], {"bar": "baz"})')
+                '"pyobj" should be an object in python syntax '
+                '(e.g., 42, "foo", ["hello", "world"], {"bar": "baz"})'
+            ) from e
 
     elif var_type == 'opts':
         val = val.split()
@@ -583,8 +577,8 @@ def bind_var(cli, var_type, line):
     elif var_type == 'int':
         try:
             val = int(val)
-        except Exception:
-            raise cli.BindError('Expected an integer')
+        except (ValueError, TypeError) as e:
+            raise cli.BindError('Expected an integer') from e
 
     return val, remainder
 
@@ -1517,31 +1511,33 @@ def _show_module(cli, module_name):
         for gate in info.igates:
             track_str = 'batches N/A packets N/A'
             try:
-                track_str = 'batches %-11d packets %-12d' % (gate.cnt,
-                                                             gate.pkts)
-            except:
-                pass
+                track_str = 'batches %-11d packets %-12d' % (gate.cnt, gate.pkts)
+            except (AttributeError, TypeError):
+                raise  # re-raise to ensure critical exceptions propagate
+
             cli.fout.write('      %3d: %s %s\t%s\n' %
-                           (gate.igate, track_str,
+                        (gate.igate, track_str,
                             ', '.join('%s:%d ->' % (g.name, g.ogate)
-                                      for g in gate.ogates),
+                                    for g in gate.ogates),
                             ', '.join('%s::%s' % (h.class_name, h.hook_name)
-                                      for h in gate.gatehooks)))
+                                    for h in gate.gatehooks)))
 
     if len(info.ogates) > 0:
         cli.fout.write('    Output gates:\n')
         for gate in info.ogates:
             track_str = 'batches N/A packets N/A'
             try:
-                track_str = 'batches %-11d packets %-12d' % (gate.cnt,
-                                                             gate.pkts)
-            except:
-                pass
+                track_str = 'batches %-11d packets %-12d' % (gate.cnt, gate.pkts)
+            except (AttributeError, TypeError):
+                raise  # re-raise to propagate unexpected critical exceptions
+
             cli.fout.write(
                 '      %3d: %s -> %d:%s\t%s\n' %
                 (gate.ogate, track_str, gate.igate, gate.name,
-                 ', '.join("%s::%s" % (h.class_name, h.hook_name)
-                           for h in gate.gatehooks)))
+                ', '.join("%s::%s" % (h.class_name, h.hook_name)
+                        for h in gate.gatehooks))
+            )
+
     cli.fout.write('    Deadends: %-12d\n' % (info.deadends,))
 
     if hasattr(info, 'dump'):
@@ -2009,10 +2005,16 @@ def _capture_gate(cli, module_name, direction, gate, opts, program, hook_fn):
         finally:
             try:
                 os.close(fd)
+            except OSError:
+                pass  # file descriptor may already be closed
+            try:
                 os.unlink(fifo)
-                os.system('stty sane')  # more/less may screw the terminal
-            except:
-                pass
+            except FileNotFoundError:
+                pass  # fifo may already be removed
+            try:
+                os.system('stty sane')  # restore terminal
+            except OSError:
+                raise  # let critical errors propagate
 
 # tcpdump can write pcap files, so we don't need to support it separately
 

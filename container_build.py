@@ -150,10 +150,10 @@ def build_kmod():
     subprocess.check_output('uname -r', shell=True).strip()
 
     try:
-        run_docker_cmd('%s kmod' % BUILD_SCRIPT)
-    except:
+        run_docker_cmd(f'{BUILD_SCRIPT} kmod')
+    except (subprocess.CalledProcessError, OSError) as e:
         print('*** module build has failed.', file=sys.stderr)
-
+        raise 
 
 def build_kmod_buildtest():
     kernels_to_test = '/lib/modules/*/build'

@@ -81,8 +81,8 @@ class CLI(object):
         if history_file is None:
             try:
                 self.history_file = os.path.expanduser('~/.bess_history')
-            except:
-                self.history_file = None
+            except OSError:
+                raise  # propagate the error instead of silently setting None
         else:
             self.history_file = history_file
 
@@ -413,6 +413,9 @@ class CLI(object):
         func(*args)
 
     def print_banner(self):
+        # The method is intentionally left empty
+        # because not all subclasses require a banner.
+        # Subclasses can override this method if needed.
         pass
 
     def process_one_line(self):
@@ -461,24 +464,23 @@ class CLI(object):
         if self.interactive and self.rl and self.history_file:
             try:
                 self.rl.write_history_file(self.history_file)
-            except:
-                self.err('Cannot write to history file "%s"' %
-                         self.history_file)
+            except OSError:
+                raise  # propagate the exception instead of silently ignoring
 
     def disable_echoctl(self):
         try:
-            # termios module might not be available. Ignore ImportError if so.
-            import termios
+            import termios  # may raise ImportError
 
-            self.old_flags = termios.tcgetattr(sys.stdin)
+            self.old_flags = termios.tcgetattr(sys.stdin)  # may raise OSError
             new_flags = self.old_flags
             new_flags[3] &= ~termios.ECHOCTL
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, new_flags)
-        except:
-            pass
+        except (ImportError, OSError):
+            raise  # propagate the exception instead of silently ignoring
 
     def restore_echoctl(self):
         try:
+            import termios  # may raise ImportError
             cur_flags = termios.tcgetattr(sys.stdin)
             new_flags = cur_flags
             if self.old_flags[3] & termios.ECHOCTL:
@@ -486,8 +488,8 @@ class CLI(object):
             else:
                 new_flags[3] &= ~termios.ECHOCTL
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, new_flags)
-        except:
-            pass
+        except (OSError, AttributeError, ImportError):
+            raise  # propagate the exception instead of silently ignoring
 
     def go_interactive(self):
         try:
@@ -512,9 +514,8 @@ class CLI(object):
         try:
             if self.history_file and os.path.exists(self.history_file):
                 self.rl.read_history_file(self.history_file)
-        except:
-            self.err('Cannot read from history file "%s"' %
-                     self.history_file)
+        except OSError:
+            raise  # propagate the exception instead of silently ignoring
 
         self.print_banner()
         self.fout.flush()

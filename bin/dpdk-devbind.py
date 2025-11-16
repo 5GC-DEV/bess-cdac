@@ -166,12 +166,15 @@ def find_module(mod):
     # check using depmod
     try:
         with open(os.devnull, "w") as fnull:
-            path = check_output(["modinfo", "-n", mod], stderr=fnull).strip()
+            path = subprocess.check_output(
+                ["modinfo", "-n", mod], stderr=fnull
+            ).strip()
 
-        if path and exists(path):
+        if path and os.path.exists(path):
             return path
-    except:  # if modinfo can't find module, it fails, so continue
-        pass
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        # module not found or command failed; continue
+        path = None
 
     # check for a copy based off current path
     tools_dir = dirname(abspath(sys.argv[0]))
@@ -197,21 +200,24 @@ def check_modules():
         sysfs_path = '/sys/module/'
 
         # Get the list of directories in sysfs_path
-        sysfs_mods = [os.path.join(sysfs_path, o) for o
-                      in os.listdir(sysfs_path)
-                      if os.path.isdir(os.path.join(sysfs_path, o))]
+        sysfs_mods = [
+            os.path.join(sysfs_path, o) 
+            for o in os.listdir(sysfs_path)
+            if os.path.isdir(os.path.join(sysfs_path, o))
+        ]
 
         # Extract the last element of '/sys/module/abc' in the array
         sysfs_mods = [a.split('/')[-1] for a in sysfs_mods]
 
-        # special case for vfio_pci (module is named vfio-pci,
+        # Special case for vfio_pci (module is named vfio-pci,
         # but its .ko is named vfio_pci)
         sysfs_mods = [a if a != 'vfio_pci' else 'vfio-pci' for a in sysfs_mods]
 
         for mod in mods:
             if mod["Name"] in sysfs_mods:
                 mod["Found"] = True
-    except:
+    except (OSError, FileNotFoundError) as e:
+        # safe to ignore if /sys/module is missing or inaccessible
         pass
 
     # check if we have at least one loaded module
@@ -437,85 +443,60 @@ def bind_one(dev_id, driver, force):
     # will erroneously bind other devices too which has the additional burden
     # of unbinding those devices
     if driver in dpdk_drivers:
-        filename = "/sys/bus/pci/devices/%s/driver_override" % dev_id
+        filename = f"/sys/bus/pci/devices/{dev_id}/driver_override"
         if os.path.exists(filename):
             try:
-                f = open(filename, "w")
-            except:
-                print("Error: bind failed for %s - Cannot open %s"
-                      % (dev_id, filename))
+                with open(filename, "w") as f:
+                    f.write(driver)
+            except (OSError, IOError) as e:
+                print(f"Error: bind failed for {dev_id} - Cannot open/write {filename}")
                 return
-            try:
-                f.write("%s" % driver)
-                f.close()
-            except:
-                print("Error: bind failed for %s - Cannot write driver %s to "
-                      "PCI ID " % (dev_id, driver))
-                return
-        # For kernels < 3.15 use new_id to add PCI id's to the driver
         else:
-            filename = "/sys/bus/pci/drivers/%s/new_id" % driver
+            filename = f"/sys/bus/pci/drivers/{driver}/new_id"
             try:
-                f = open(filename, "w")
-            except:
-                print("Error: bind failed for %s - Cannot open %s"
-                      % (dev_id, filename))
-                return
-            try:
-                # Convert Device and Vendor Id to int to write to new_id
-                f.write("%04x %04x" % (int(dev["Vendor"],16),
-                        int(dev["Device"], 16)))
-                f.close()
-            except:
-                print("Error: bind failed for %s - Cannot write new PCI ID to "
-                      "driver %s" % (dev_id, driver))
+                with open(filename, "w") as f:
+                    # Convert Vendor and Device IDs to int to write to new_id
+                    f.write(f"{int(dev['Vendor'],16):04x} {int(dev['Device'],16):04x}")
+            except (OSError, IOError, ValueError) as e:
+                print(f"Error: bind failed for {dev_id} - Cannot open/write new PCI ID to driver {driver}")
                 return
 
-    # do the bind by writing to /sys
-    filename = "/sys/bus/pci/drivers/%s/bind" % driver
+    # Do the bind by writing to /sys
+    filename = f"/sys/bus/pci/drivers/{driver}/bind"
     try:
-        f = open(filename, "a")
-    except:
-        print("Error: bind failed for %s - Cannot open %s"
-              % (dev_id, filename))
+        with open(filename, "a") as f:
+            f.write(dev_id)
+    except (OSError, IOError) as e:
+        print(f"Error: bind failed for {dev_id} - Cannot open/write {filename}")
         if saved_driver is not None:  # restore any previous driver
             bind_one(dev_id, saved_driver, force)
         return
+
     try:
         f.write(dev_id)
         f.close()
-    except:
-        # for some reason, closing dev_id after adding a new PCI ID to new_id
-        # results in IOError. however, if the device was successfully bound,
-        # we don't care for any errors and can safely ignore IOError
+    except (OSError, IOError):
+        # Sometimes closing dev_id after adding a new PCI ID causes IOError.
+        # If the device was successfully bound, we can safely ignore the error.
         tmp = get_pci_device_details(dev_id, True)
         if "Driver_str" in tmp and tmp["Driver_str"] == driver:
             return
-        print("Error: bind failed for %s - Cannot bind to driver %s"
-              % (dev_id, driver))
-        if saved_driver is not None:  # restore any previous driver
+        print(f"Error: bind failed for {dev_id} - Cannot bind to driver {driver}")
+        if saved_driver is not None:  # restore previous driver
             bind_one(dev_id, saved_driver, force)
         return
 
     # For kernels > 3.15 driver_override is used to bind a device to a driver.
     # Before unbinding it, overwrite driver_override with empty string so that
     # the device can be bound to any other driver
-    filename = "/sys/bus/pci/devices/%s/driver_override" % dev_id
+    filename = f"/sys/bus/pci/devices/{dev_id}/driver_override"
     if os.path.exists(filename):
         try:
-            f = open(filename, "w")
-        except:
-            print("Error: unbind failed for %s - Cannot open %s"
-                  % (dev_id, filename))
+            with open(filename, "w") as f:
+                f.write("\00")
+        except (OSError, IOError) as e:
+            print(f"Error: unbind failed for {dev_id} - Cannot open/write {filename}")
             sys.exit(1)
-        try:
-            f.write("\00")
-            f.close()
-        except:
-            print("Error: unbind failed for %s - Cannot open %s"
-                  % (dev_id, filename))
-            sys.exit(1)
-
 
 def unbind_all(dev_list, force=False):
     """Unbind method, takes a list of device locations"""
