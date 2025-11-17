@@ -1972,8 +1972,10 @@ def _capture_gate(cli, module_name, direction, gate, opts, program, hook_fn):
     if direction is None:
         direction = 'out'
 
-    fifo = tempfile.mktemp()
-    os.mkfifo(fifo, 0o600)   # random people should not see packets...
+     # Create a secure temporary directory atomically (replaces insecure mktemp)
+    tmpdir = tempfile.mkdtemp()    
+    fifo = os.path.join(tmpdir, "fifo")
+    os.mkfifo(fifo, 0o600)              # FIFO with safe permissions
 
     fd = os.open(fifo, os.O_RDWR)
 
@@ -2008,11 +2010,15 @@ def _capture_gate(cli, module_name, direction, gate, opts, program, hook_fn):
             except OSError:
                 pass  # file descriptor may already be closed
             try:
-                os.unlink(fifo)
+                os.unlink(fifo)             # Remove FIFO file
             except FileNotFoundError:
-                pass  # fifo may already be removed
+                pass
             try:
-                os.system('stty sane')  # restore terminal
+                shutil.rmtree(tmpdir)       # Remove temporary directory to avoid leftover files
+            except Exception:
+                pass
+            try:
+                os.system('stty sane')      # Restore terminal state
             except OSError:
                 raise  # let critical errors propagate
 
