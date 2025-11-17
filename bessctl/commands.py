@@ -56,8 +56,8 @@ import sugar
 try:
     this_dir = os.path.dirname(os.path.realpath(__file__))
     sys.path.insert(1, os.path.join(this_dir, '..'))
-    from pybess.module import *
-    from pybess.port import *
+    from pybess.module import Module
+    from pybess.port import Port
 except ImportError:
     print('Cannot import the API module (pybess)', file=sys.stderr)
     raise
@@ -216,7 +216,7 @@ def get_var_attrs(cli, var_token, partial_word):
             try:
                 var_candidates = [str(m.wid) for m in
                                   cli.bess.list_workers().workers_status]
-            except:
+            except Exception:
                 pass
 
         elif var_token == 'WORKER_ID...':
@@ -225,7 +225,7 @@ def get_var_attrs(cli, var_token, partial_word):
             try:
                 var_candidates = [str(m.wid) for m in
                                   cli.bess.list_workers().workers_status]
-            except:
+            except Exception:
                 pass
 
         elif var_token == 'DRIVER':
@@ -233,7 +233,7 @@ def get_var_attrs(cli, var_token, partial_word):
             var_desc = 'name of a port driver'
             try:
                 var_candidates = cli.bess.list_drivers().driver_names
-            except:
+            except Exception:
                 pass
 
         elif var_token == 'DRIVER...':
@@ -241,7 +241,7 @@ def get_var_attrs(cli, var_token, partial_word):
             var_desc = 'one or more port driver names'
             try:
                 var_candidates = cli.bess.list_drivers().driver_names
-            except:
+            except Exception:
                 pass
 
         elif var_token == 'MCLASS':
@@ -257,7 +257,7 @@ def get_var_attrs(cli, var_token, partial_word):
             var_desc = 'one or more module class names'
             try:
                 var_candidates = cli.bess.list_mclasses().names
-            except:
+            except Exception:
                 pass
 
         elif var_token == '[NEW_MODULE]':
@@ -270,7 +270,7 @@ def get_var_attrs(cli, var_token, partial_word):
             try:
                 var_candidates = [m.name for m in
                                   cli.bess.list_modules().modules]
-            except:
+            except Exception:
                 pass
 
         elif var_token == '[MODULE]':
@@ -280,7 +280,7 @@ def get_var_attrs(cli, var_token, partial_word):
             try:
                 var_candidates += [m.name for m in
                                    cli.bess.list_modules().modules]
-            except:
+            except Exception:
                 pass
 
         elif var_token == 'MODULE...':
@@ -289,7 +289,7 @@ def get_var_attrs(cli, var_token, partial_word):
             try:
                 var_candidates = [m.name for m in
                                   cli.bess.list_modules().modules]
-            except:
+            except Exception:
                 pass
 
         elif var_token == 'MODULE_CMD':
@@ -314,7 +314,7 @@ def get_var_attrs(cli, var_token, partial_word):
             var_desc = 'name of a port'
             try:
                 var_candidates = [p.name for p in cli.bess.list_ports().ports]
-            except:
+            except Exception:
                 pass
 
         elif var_token == 'PORT...':
@@ -322,7 +322,7 @@ def get_var_attrs(cli, var_token, partial_word):
             var_desc = 'one or more port names'
             try:
                 var_candidates = [p.name for p in cli.bess.list_ports().ports]
-            except:
+            except Exception:
                 pass
 
         elif var_token == 'TC...':
@@ -331,7 +331,7 @@ def get_var_attrs(cli, var_token, partial_word):
             try:
                 var_candidates = [getattr(c, 'class').name
                                   for c in cli.bess.list_tcs().classes_status]
-            except:
+            except Exception:
                 pass
 
         elif var_token == 'CONF':
@@ -374,7 +374,7 @@ def get_var_attrs(cli, var_token, partial_word):
             var_desc = 'name of a gatehook class'
             try:
                 var_candidates = cli.bess.list_gatehook_classes().names
-            except:
+            except Exception:
                 pass
 
         elif var_token == 'GATEHOOKCLASS...':
@@ -382,7 +382,7 @@ def get_var_attrs(cli, var_token, partial_word):
             var_desc = 'one or more gatehook class names'
             try:
                 var_candidates = cli.bess.list_gatehook_classes().names
-            except:
+            except Exception:
                 pass
 
         elif var_token == 'GATEHOOK':
@@ -563,7 +563,7 @@ def bind_var(cli, var_type, line):
     elif var_type == 'map':
         try:
             val = eval('_parse_map(%s)' % head)
-        except:
+        except Exception:
             raise cli.BindError('"map" should be "key=val, key=val, ..."')
 
     elif var_type == 'pyobj':
@@ -572,7 +572,7 @@ def bind_var(cli, var_type, line):
                 val = None
             else:
                 val = eval(head)
-        except:
+        except Exception:
             raise cli.BindError(
                 '"pyobj" should be an object in python syntax'
                 ' (e.g., 42, "foo", ["hello", "world"], {"bar": "baz"})')
@@ -1519,7 +1519,7 @@ def _show_module(cli, module_name):
             try:
                 track_str = 'batches %-11d packets %-12d' % (gate.cnt,
                                                              gate.pkts)
-            except:
+            except Exception:
                 pass
             cli.fout.write('      %3d: %s %s\t%s\n' %
                            (gate.igate, track_str,
@@ -1535,7 +1535,7 @@ def _show_module(cli, module_name):
             try:
                 track_str = 'batches %-11d packets %-12d' % (gate.cnt,
                                                              gate.pkts)
-            except:
+            except Exception:
                 pass
             cli.fout.write(
                 '      %3d: %s -> %d:%s\t%s\n' %
@@ -1976,8 +1976,10 @@ def _capture_gate(cli, module_name, direction, gate, opts, program, hook_fn):
     if direction is None:
         direction = 'out'
 
-    fifo = tempfile.mktemp()
-    os.mkfifo(fifo, 0o600)   # random people should not see packets...
+    # Create a secure temporary directory atomically (replaces insecure mktemp)
+    tmpdir = tempfile.mkdtemp()    
+    fifo = os.path.join(tmpdir, "fifo")
+    os.mkfifo(fifo, 0o600)              # FIFO with safe permissions
 
     fd = os.open(fifo, os.O_RDWR)
 
@@ -2011,7 +2013,7 @@ def _capture_gate(cli, module_name, direction, gate, opts, program, hook_fn):
                 os.close(fd)
                 os.unlink(fifo)
                 os.system('stty sane')  # more/less may screw the terminal
-            except:
+            except OSError:
                 pass
 
 # tcpdump can write pcap files, so we don't need to support it separately

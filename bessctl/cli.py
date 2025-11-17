@@ -81,7 +81,7 @@ class CLI(object):
         if history_file is None:
             try:
                 self.history_file = os.path.expanduser('~/.bess_history')
-            except:
+            except Exception:
                 self.history_file = None
         else:
             self.history_file = history_file
@@ -413,6 +413,9 @@ class CLI(object):
         func(*args)
 
     def print_banner(self):
+        # The method is intentionally left empty
+        # because not all subclasses require a banner.
+        # Subclasses can override this method if needed.
         pass
 
     def process_one_line(self):
@@ -461,7 +464,7 @@ class CLI(object):
         if self.interactive and self.rl and self.history_file:
             try:
                 self.rl.write_history_file(self.history_file)
-            except:
+            except OSError:
                 self.err('Cannot write to history file "%s"' %
                          self.history_file)
 
@@ -474,7 +477,7 @@ class CLI(object):
             new_flags = self.old_flags
             new_flags[3] &= ~termios.ECHOCTL
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, new_flags)
-        except:
+        except Exception:
             pass
 
     def restore_echoctl(self):
@@ -486,7 +489,7 @@ class CLI(object):
             else:
                 new_flags[3] &= ~termios.ECHOCTL
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, new_flags)
-        except:
+        except Exception:
             pass
 
     def go_interactive(self):
@@ -512,7 +515,7 @@ class CLI(object):
         try:
             if self.history_file and os.path.exists(self.history_file):
                 self.rl.read_history_file(self.history_file)
-        except:
+        except OSError:
             self.err('Cannot read from history file "%s"' %
                      self.history_file)
 

@@ -44,6 +44,8 @@ from .builtin_pb import service_pb2_grpc
 class DummyServiceImpl(service_pb2_grpc.BESSControlServicer):
 
     def __init__(self):
+        # No initialization is required for this dummy service.
+        # This constructor is intentionally left empty.
         pass
 
     def KillBess(self, request, context):
