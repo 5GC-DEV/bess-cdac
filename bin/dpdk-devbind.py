@@ -170,8 +170,10 @@ def find_module(mod):
 
         if path and exists(path):
             return path
-    except:  # if modinfo can't find module, it fails, so continue
+    except OSError:  # if modinfo can't find module, it fails, so continue
         pass
+    except Exception as e:
+        print(f"Unexpected error checking module: {e}")
 
     # check for a copy based off current path
     tools_dir = dirname(abspath(sys.argv[0]))
@@ -211,8 +213,10 @@ def check_modules():
         for mod in mods:
             if mod["Name"] in sysfs_mods:
                 mod["Found"] = True
-    except:
+    except OSError:
         pass
+    except Exception as e:
+        print(f"Error scanning sysfs modules: {e}")
 
     # check if we have at least one loaded module
     if True not in [mod["Found"] for mod in mods] and b_flag is not None:
@@ -441,34 +445,50 @@ def bind_one(dev_id, driver, force):
         if os.path.exists(filename):
             try:
                 f = open(filename, "w")
-            except:
+            except OSError:
                 print("Error: bind failed for %s - Cannot open %s"
                       % (dev_id, filename))
+                return
+            except Exception as e:
+                print("Error: bind failed for %s - Unexpected error opening %s: %s"
+                    % (dev_id, filename, e))
                 return
             try:
                 f.write("%s" % driver)
                 f.close()
-            except:
+            except OSError:
                 print("Error: bind failed for %s - Cannot write driver %s to "
                       "PCI ID " % (dev_id, driver))
+                return
+            except Exception as e:
+                print("Error: bind failed for %s - Unexpected error writing driver %s: %s"
+                    % (dev_id, driver, e))
                 return
         # For kernels < 3.15 use new_id to add PCI id's to the driver
         else:
             filename = "/sys/bus/pci/drivers/%s/new_id" % driver
             try:
                 f = open(filename, "w")
-            except:
+            except OSError:
                 print("Error: bind failed for %s - Cannot open %s"
                       % (dev_id, filename))
+                return
+            except Exception as e:
+                print("Error: bind failed for %s - Unexpected error opening %s: %s"
+                    % (dev_id, filename, e))
                 return
             try:
                 # Convert Device and Vendor Id to int to write to new_id
                 f.write("%04x %04x" % (int(dev["Vendor"],16),
                         int(dev["Device"], 16)))
                 f.close()
-            except:
+            except OSError:
                 print("Error: bind failed for %s - Cannot write new PCI ID to "
                       "driver %s" % (dev_id, driver))
+                return
+            except Exception as e:
+                print("Error: bind failed for %s - Unexpected error writing to driver %s: %s"
+                    % (dev_id, driver, e))
                 return
 
     # do the bind by writing to /sys

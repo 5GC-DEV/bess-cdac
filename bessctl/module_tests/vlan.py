@@ -30,7 +30,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 import sys
-from test_utils import *
+from test_utils import BessModuleTestCase, VLANSplit, scapy, unittest
 
 
 class BessVlanTest(BessModuleTestCase):

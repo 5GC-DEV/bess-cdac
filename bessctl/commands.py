@@ -56,8 +56,8 @@ import sugar
 try:
     this_dir = os.path.dirname(os.path.realpath(__file__))
     sys.path.insert(1, os.path.join(this_dir, '..'))
-    from pybess.module import *
-    from pybess.port import *
+    from pybess.module import Module
+    from pybess.port import Port
 except ImportError:
     print('Cannot import the API module (pybess)', file=sys.stderr)
     raise
@@ -216,8 +216,10 @@ def get_var_attrs(cli, var_token, partial_word):
             try:
                 var_candidates = [str(m.wid) for m in
                                   cli.bess.list_workers().workers_status]
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting worker list: {e}")
 
         elif var_token == 'WORKER_ID...':
             var_type = 'wid+'
@@ -225,40 +227,50 @@ def get_var_attrs(cli, var_token, partial_word):
             try:
                 var_candidates = [str(m.wid) for m in
                                   cli.bess.list_workers().workers_status]
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting worker list: {e}")
 
         elif var_token == 'DRIVER':
             var_type = 'name'
             var_desc = 'name of a port driver'
             try:
                 var_candidates = cli.bess.list_drivers().driver_names
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting driver list: {e}")
 
         elif var_token == 'DRIVER...':
             var_type = 'name+'
             var_desc = 'one or more port driver names'
             try:
                 var_candidates = cli.bess.list_drivers().driver_names
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting driver list: {e}")
 
         elif var_token == 'MCLASS':
             var_type = 'name'
             var_desc = 'name of a module class'
             try:
                 var_candidates = cli.bess.list_mclasses().names
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting module class list: {e}")
 
         elif var_token == 'MCLASS...':
             var_type = 'name+'
             var_desc = 'one or more module class names'
             try:
                 var_candidates = cli.bess.list_mclasses().names
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting module class list: {e}")
 
         elif var_token == '[NEW_MODULE]':
             var_type = 'name'
@@ -270,8 +282,10 @@ def get_var_attrs(cli, var_token, partial_word):
             try:
                 var_candidates = [m.name for m in
                                   cli.bess.list_modules().modules]
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting module list: {e}")
 
         elif var_token == '[MODULE]':
             var_type = 'name'
@@ -280,8 +294,10 @@ def get_var_attrs(cli, var_token, partial_word):
             try:
                 var_candidates += [m.name for m in
                                    cli.bess.list_modules().modules]
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting module list: {e}")
 
         elif var_token == 'MODULE...':
             var_type = 'name+'
@@ -289,8 +305,10 @@ def get_var_attrs(cli, var_token, partial_word):
             try:
                 var_candidates = [m.name for m in
                                   cli.bess.list_modules().modules]
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting module list: {e}")
 
         elif var_token == 'MODULE_CMD':
             var_type = 'name'
@@ -314,16 +332,20 @@ def get_var_attrs(cli, var_token, partial_word):
             var_desc = 'name of a port'
             try:
                 var_candidates = [p.name for p in cli.bess.list_ports().ports]
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting port list: {e}")
 
         elif var_token == 'PORT...':
             var_type = 'name+'
             var_desc = 'one or more port names'
             try:
                 var_candidates = [p.name for p in cli.bess.list_ports().ports]
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting port list: {e}")
 
         elif var_token == 'TC...':
             var_type = 'name+'
@@ -331,8 +353,10 @@ def get_var_attrs(cli, var_token, partial_word):
             try:
                 var_candidates = [getattr(c, 'class').name
                                   for c in cli.bess.list_tcs().classes_status]
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting traffic class list: {e}")
 
         elif var_token == 'CONF':
             var_type = 'confname'
@@ -374,16 +398,20 @@ def get_var_attrs(cli, var_token, partial_word):
             var_desc = 'name of a gatehook class'
             try:
                 var_candidates = cli.bess.list_gatehook_classes().names
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting gatehook class list: {e}")
 
         elif var_token == 'GATEHOOKCLASS...':
             var_type = 'name+'
             var_desc = 'one or more gatehook class names'
             try:
                 var_candidates = cli.bess.list_gatehook_classes().names
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error getting gatehook class list: {e}")
 
         elif var_token == 'GATEHOOK':
             var_type = 'name'
@@ -563,7 +591,8 @@ def bind_var(cli, var_type, line):
     elif var_type == 'map':
         try:
             val = eval('_parse_map(%s)' % head)
-        except:
+        except Exception as e:
+            print(f"Map parsing error: {e}")
             raise cli.BindError('"map" should be "key=val, key=val, ..."')
 
     elif var_type == 'pyobj':
@@ -572,7 +601,8 @@ def bind_var(cli, var_type, line):
                 val = None
             else:
                 val = eval(head)
-        except:
+        except Exception as e:
+            print(f"Python object parsing error: {e}")
             raise cli.BindError(
                 '"pyobj" should be an object in python syntax'
                 ' (e.g., 42, "foo", ["hello", "world"], {"bar": "baz"})')
@@ -1519,8 +1549,10 @@ def _show_module(cli, module_name):
             try:
                 track_str = 'batches %-11d packets %-12d' % (gate.cnt,
                                                              gate.pkts)
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error formatting gate stats: {e}")
             cli.fout.write('      %3d: %s %s\t%s\n' %
                            (gate.igate, track_str,
                             ', '.join('%s:%d ->' % (g.name, g.ogate)
@@ -1535,8 +1567,10 @@ def _show_module(cli, module_name):
             try:
                 track_str = 'batches %-11d packets %-12d' % (gate.cnt,
                                                              gate.pkts)
-            except:
+            except AttributeError:
                 pass
+            except Exception as e:
+                print(f"Error formatting output gate stats: {e}")
             cli.fout.write(
                 '      %3d: %s -> %d:%s\t%s\n' %
                 (gate.ogate, track_str, gate.igate, gate.name,
@@ -1976,10 +2010,10 @@ def _capture_gate(cli, module_name, direction, gate, opts, program, hook_fn):
     if direction is None:
         direction = 'out'
 
-    fifo = tempfile.mktemp()
-    os.mkfifo(fifo, 0o600)   # random people should not see packets...
-
-    fd = os.open(fifo, os.O_RDWR)
+    # Create a secure temporary directory atomically (replaces insecure mktemp)
+    tmpdir = tempfile.mkdtemp()    
+    fifo = os.path.join(tmpdir, "fifo")
+    os.mkfifo(fifo, 0o600)              # FIFO with safe permissions
 
     capture_cmd = [program]
     capture_cmd.extend(['-r', fifo])
@@ -2011,8 +2045,10 @@ def _capture_gate(cli, module_name, direction, gate, opts, program, hook_fn):
                 os.close(fd)
                 os.unlink(fifo)
                 os.system('stty sane')  # more/less may screw the terminal
-            except:
+            except OSError as e:
                 pass
+            except Exception as e:
+                print(f"Unexpected cleanup error: {e}")
 
 # tcpdump can write pcap files, so we don't need to support it separately
 
