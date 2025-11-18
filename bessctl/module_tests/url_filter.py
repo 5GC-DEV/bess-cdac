@@ -31,7 +31,7 @@
 
 import socket
 import sys
-from test_utils import *
+from test_utils import BessModuleTestCase, UrlFilter, scapy, unittest
 from pybess import protobuf_to_dict as pb_conv
 
 

@@ -40,7 +40,7 @@ try:
     this_dir = os.path.dirname(os.path.realpath(__file__))
     bessctl = os.path.join(this_dir, 'bessctl')
     sys.path.insert(1, os.path.join(this_dir, '../../../'))
-    from pybess.bess import *
+    from pybess.bess import BESS
 except ImportError:
     print('Cannot import the API module (pybess)', file=sys.stderr)
     raise

@@ -29,7 +29,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-from test_utils import *
+from test_utils import BessModuleTestCase, Bypass, get_udp_packet, unittest, sys
 
 
 class BessBypassTest(BessModuleTestCase):

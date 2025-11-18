@@ -413,6 +413,9 @@ class CLI(object):
         func(*args)
 
     def print_banner(self):
+        # The method is intentionally left empty
+        # because not all subclasses require a banner.
+        # Subclasses can override this method if needed.
         pass
 
     def process_one_line(self):
