@@ -81,7 +81,10 @@ class CLI(object):
         if history_file is None:
             try:
                 self.history_file = os.path.expanduser('~/.bess_history')
-            except:
+            except OSError:
+                self.history_file = None
+            except Exception as e:
+                print(f"Warning: Unexpected error with history file: {e}")
                 self.history_file = None
         else:
             self.history_file = history_file
@@ -464,9 +467,12 @@ class CLI(object):
         if self.interactive and self.rl and self.history_file:
             try:
                 self.rl.write_history_file(self.history_file)
-            except:
+            except OSError:
                 self.err('Cannot write to history file "%s"' %
                          self.history_file)
+            except Exception as e:
+                self.err('Unexpected error saving history file "%s": %s' %
+                        (self.history_file, e))
 
     def disable_echoctl(self):
         try:
@@ -477,11 +483,15 @@ class CLI(object):
             new_flags = self.old_flags
             new_flags[3] &= ~termios.ECHOCTL
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, new_flags)
-        except:
+        except ImportError:
             pass
+        except Exception as e:
+            print(f"Unexpected terminal error: {e}")
 
     def restore_echoctl(self):
         try:
+            import termios
+
             cur_flags = termios.tcgetattr(sys.stdin)
             new_flags = cur_flags
             if self.old_flags[3] & termios.ECHOCTL:
@@ -489,8 +499,10 @@ class CLI(object):
             else:
                 new_flags[3] &= ~termios.ECHOCTL
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, new_flags)
-        except:
+        except ImportError:
             pass
+        except Exception as e:
+            print(f"Unexpected terminal error: {e}")
 
     def go_interactive(self):
         try:
@@ -515,9 +527,12 @@ class CLI(object):
         try:
             if self.history_file and os.path.exists(self.history_file):
                 self.rl.read_history_file(self.history_file)
-        except:
+        except OSError:
             self.err('Cannot read from history file "%s"' %
                      self.history_file)
+        except Exception as e:
+            self.err('Unexpected error reading history file "%s": %s' %
+                    (self.history_file, e))
 
         self.print_banner()
         self.fout.flush()

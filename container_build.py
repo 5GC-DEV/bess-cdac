@@ -151,8 +151,10 @@ def build_kmod():
 
     try:
         run_docker_cmd('%s kmod' % BUILD_SCRIPT)
-    except:
+    except OSError:
         print('*** module build has failed.', file=sys.stderr)
+    except Exception as e:
+        print('*** Unexpected error: %s' % e, file=sys.stderr)
 
 
 def build_kmod_buildtest():
