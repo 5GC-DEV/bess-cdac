@@ -2014,6 +2014,7 @@ def _capture_gate(cli, module_name, direction, gate, opts, program, hook_fn):
     tmpdir = tempfile.mkdtemp()    
     fifo = os.path.join(tmpdir, "fifo")
     os.mkfifo(fifo, 0o600)              # FIFO with safe permissions
+    fd = os.open(fifo, os.O_RDWR)
 
     capture_cmd = [program]
     capture_cmd.extend(['-r', fifo])
