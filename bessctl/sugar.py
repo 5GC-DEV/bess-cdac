@@ -120,6 +120,8 @@ STRING_SHORT = r'\'.*?\'|\".*?\"'
 STRING_LONG = r'\'\'\'.*?\'\'\'|""".*?"""'
 STRING_ALL = STRING_LONG + '|' + STRING_SHORT
 
+# constants for duplicate literals
+BESS_ENV_PREFIX = "__bess_env__('" 
 
 def replace_envvar(s):
     environment = r'\$(' + NAME + ')'\
@@ -146,12 +148,12 @@ def replace_envvar(s):
             # if match.group(3) is not None, match.group(4) is not None
             # if match.group(5) is not None, then there is a parameter
             if match.group(5) is None and match.group(7) is None:
-                return "__bess_env__('" + match.group(4) + "')"
+                return BESS_ENV_PREFIX + match.group(4) + "')"
             elif match.group(5) is not None:
-                return "__bess_env__('" + match.group(4) + "', " + \
+                return BESS_ENV_PREFIX + match.group(4) + "', " + \
                     match.group(6) + ")"
             else:
-                return "__bess_env__('" + match.group(4) + "', "
+                return BESS_ENV_PREFIX + match.group(4) + "', "
 
         else:
             return match.group()
@@ -180,103 +182,193 @@ def is_gate_expr(exp, is_ogate):
         return True
 
 
-def replace_rarrows(s):
-    # if the gate expression is not trivial, add parenthesis
-    def parenthesize(exp):
-        for t in tokenize.generate_tokens(io.StringIO(exp).readline):
-            if t[0] == tokenize.OP:
-                l = len(exp) - len(exp.lstrip())
-                r = len(exp) - len(exp.rstrip())
-                return '%s(%s)%s' % (exp[:l], exp.strip(), exp[len(exp) - r:])
-        return exp
-
-    # Phase 1: split the string with delimiter "->"
-    # (cannot simply use .split() as lexical analysis is required)
-    last_token = None
-    arrows = []
-
-    try:
-        for t in tokenize.generate_tokens(io.StringIO(s).readline):
-            token = t[1]
-            row, col = t[2]
-
-            if last_token == '-' and token == '>':  # Python 2.x
-                # line numbers returned by tokenizer are 1-indexed...
-                arrows.append((row - 1, col - 1))
-            elif token == '->':  # Python 3
-                arrows.append((row - 1, col))
-
-            last_token = token
-
-    except (tokenize.TokenError, IndentationError):
-        # Source code has syntax errors, but arrows has been set
-        # correctly up until now.
-        pass
-
-    segments = []
-    curr_seg = []
-    arrow_idx = 0
-
-    lines = io.StringIO(s).readlines()
-    line_idx = 0
-    col_offset = 0
-
-    while line_idx < len(lines):
-        line = lines[line_idx]
-
-        if arrow_idx < len(arrows):
-            row, col = arrows[arrow_idx]
-        else:
-            row, col = None, None
-
-        if row is None or line_idx < row:
-            curr_seg.append(line[col_offset:])
-            line_idx += 1
-            col_offset = 0
-        elif line_idx == row:
-            curr_seg.append(line[col_offset:col])
-            segments.append(''.join(curr_seg))
-            curr_seg = []
-            col_offset = col + 2
-            arrow_idx += 1
-        else:
-            assert False
-    segments.append(''.join(curr_seg))
-
-    # Phase 2: transform output gate (:xx ->) and input gate (-> :yy) parts
-    for i in range(len(segments) - 1):
-        # process output gate
-        seg = segments[i]
-        colon_pos = seg.rfind(':')
-        while colon_pos != -1:
-            ogate = seg[colon_pos + 1:]
-
-            if ogate.strip() == '':
-                break
-
-            if is_gate_expr(ogate, True):
-                segments[i] = seg[:colon_pos] + '*' + parenthesize(ogate)
-                break
-
-            colon_pos = seg.rfind(':', 0, colon_pos)
-
-        # process input gate
-        seg = segments[i + 1]
-        colon_pos = seg.find(':')
-        while colon_pos != -1:
-            igate = seg[:colon_pos]
-            if igate.strip() == '':
-                break
-
-            if is_gate_expr(igate, False):
-                segments[
-                    i + 1] = parenthesize(igate) + '*' + seg[colon_pos + 1:]
-                break
-
-            colon_pos = seg.find(':', colon_pos + 1)
-
-    return '+'.join(segments)
-
+def replace_rarrows(s):  
+    """  
+    Replace arrow syntax (->) with Python operations in BESS scripts.  
+      
+    This function transforms BESS's arrow-based module connection syntax  
+    into Python code using the + and * operators for module connections  
+    and gate specifications.  
+      
+    Args:  
+        s: Input string containing BESS script with arrow syntax  
+          
+    Returns:  
+        str: Transformed Python code with module connections  
+    """  
+    # Phase 1: Find all arrow positions and split the string into segments  
+    arrow_positions = _find_arrow_positions(s)  
+    segments = _split_by_arrows(s, arrow_positions)  
+      
+    # Phase 2: Transform gate specifications in each segment  
+    _transform_gate_specifications(segments)  
+      
+    return '+'.join(segments)  
+  
+def _find_arrow_positions(s):  
+    """  
+    Find all positions of arrow operators (->) in the input string.  
+      
+    Uses lexical analysis to properly identify arrows while avoiding  
+    false positives in string literals or comments.  
+      
+    Args:  
+        s: Input string to analyze  
+          
+    Returns:  
+        list: List of (row, col) tuples indicating arrow positions  
+    """  
+    arrow_positions = []  
+    last_token = None  
+      
+    try:  
+        for t in tokenize.generate_tokens(io.StringIO(s).readline):  
+            token = t[1]  
+            row, col = t[2]  
+              
+            # Handle both Python 2.x and Python 3 tokenization  
+            if last_token == '-' and token == '>':  # Python 2.x  
+                arrow_positions.append((row - 1, col - 1))  
+            elif token == '->':  # Python 3  
+                arrow_positions.append((row - 1, col))  
+              
+            last_token = token  
+              
+    except (tokenize.TokenError, IndentationError):  
+        # Source code has syntax errors, but arrows have been found  
+        # correctly up until this point  
+        pass  
+      
+    return arrow_positions  
+  
+def _split_by_arrows(s, arrow_positions):  
+    """  
+    Split the input string into segments based on arrow positions.  
+      
+    Args:  
+        s: Input string to split  
+        arrow_positions: List of arrow positions from _find_arrow_positions  
+          
+    Returns:  
+        list: List of string segments between arrows  
+    """  
+    segments = []  
+    curr_seg = []  
+    arrow_idx = 0  
+      
+    lines = io.StringIO(s).readlines()  
+    line_idx = 0  
+    col_offset = 0  
+      
+    while line_idx < len(lines):  
+        line = lines[line_idx]  
+          
+        if arrow_idx < len(arrow_positions):  
+            row, col = arrow_positions[arrow_idx]  
+        else:  
+            row, col = None, None  
+          
+        if row is None or line_idx < row:  
+            # No arrow in this line, add entire line  
+            curr_seg.append(line[col_offset:])  
+            line_idx += 1  
+            col_offset = 0  
+        elif line_idx == row:  
+            # Arrow found in current line, split at arrow position  
+            curr_seg.append(line[col_offset:col])  
+            segments.append(''.join(curr_seg))  
+            curr_seg = []  
+            col_offset = col + 2  # Skip past '->'  
+            arrow_idx += 1  
+        else:  
+            assert False  
+      
+    segments.append(''.join(curr_seg))  
+    return segments  
+  
+def _transform_gate_specifications(segments):  
+    """  
+    Transform output gate (:xx ->) and input gate (-> :yy) specifications.  
+      
+    Converts gate syntax into Python multiplication operations for  
+    proper gate specification in module connections.  
+      
+    Args:  
+        segments: List of segments to transform (modified in-place)  
+    """  
+    for i in range(len(segments) - 1):  
+        # Process output gate specification in current segment  
+        _process_output_gate(segments, i)  
+          
+        # Process input gate specification in next segment  
+        _process_input_gate(segments, i)  
+  
+def _process_output_gate(segments, segment_idx):  
+    """  
+    Process output gate specification (:xx ->) in a segment.  
+      
+    Args:  
+        segments: List of segments (modified in-place)  
+        segment_idx: Index of the segment to process  
+    """  
+    seg = segments[segment_idx]  
+    colon_pos = seg.rfind(':')  
+      
+    while colon_pos != -1:  
+        ogate = seg[colon_pos + 1:]  
+          
+        if ogate.strip() == '':  
+            break  
+          
+        if is_gate_expr(ogate, True):  
+            # Transform :ogate to *parenthesize(ogate)  
+            segments[segment_idx] = seg[:colon_pos] + '*' + _parenthesize(ogate)  
+            break  
+          
+        # Look for previous colon  
+        colon_pos = seg.rfind(':', 0, colon_pos)  
+  
+def _process_input_gate(segments, segment_idx):  
+    """  
+    Process input gate specification (-> :yy) in a segment.  
+      
+    Args:  
+        segments: List of segments (modified in-place)  
+        segment_idx: Index of the segment to process  
+    """  
+    seg = segments[segment_idx + 1]  
+    colon_pos = seg.find(':')  
+      
+    while colon_pos != -1:  
+        igate = seg[:colon_pos]  
+          
+        if igate.strip() == '':  
+            break  
+          
+        if is_gate_expr(igate, False):  
+            # Transform igate: to parenthesize(igate)*  
+            segments[segment_idx + 1] = _parenthesize(igate) + '*' + seg[colon_pos + 1:]  
+            break  
+          
+        # Look for next colon  
+        colon_pos = seg.find(':', colon_pos + 1)  
+  
+def _parenthesize(exp):  
+    """  
+    Add parentheses around an expression if needed for complex expressions.  
+      
+    Args:  
+        exp: Expression to potentially parenthesize  
+          
+    Returns:  
+        str: Parenthesized expression if needed, original expression otherwise  
+    """  
+    for t in tokenize.generate_tokens(io.StringIO(exp).readline):  
+        if t[0] == tokenize.OP:  
+            l = len(exp) - len(exp.lstrip())  
+            r = len(exp) - len(exp.rstrip())  
+            return '%s(%s)%s' % (exp[:l], exp.strip(), exp[len(exp) - r:])  
+    return exp
 
 def create_module_string(s):
 

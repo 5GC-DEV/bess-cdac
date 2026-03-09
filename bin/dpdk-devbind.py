@@ -40,6 +40,12 @@ import getopt
 import subprocess
 from os.path import exists, abspath, dirname, basename
 
+# constants for duplicate literals
+UNBIND_OPEN_ERROR = "Error: unbind failed for %s - Cannot open %s"  
+BIND_OPEN_ERROR = "Error: bind failed for %s - Cannot open %s"  
+DRIVER_OVERRIDE_PATH = "/sys/bus/pci/devices/%s/driver_override" 
+USAGE_INFO = "Run '%s --usage' for further information" 
+
 # The PCI base class for all devices
 network_class = {'Class': '02', 'Vendor': None, 'Device': None,
                     'SVendor': None, 'SDevice': None}
@@ -266,84 +272,112 @@ def clear_data():
     '''This function clears any old data'''
     devices = {}
 
-def get_device_details(devices_type):
-    '''This function populates the "devices" dictionary. The keys used are
-    the pci addresses (domain:bus:slot.func). The values are themselves
-    dictionaries - one for each NIC.'''
-    global devices
-    global dpdk_drivers
-
-    # first loop through and read details for all devices
-    # request machine readable format, with numeric IDs and String
-    dev = {}
-    dev_lines = check_output(["lspci", "-Dvmmnnk"]).splitlines()
-    for dev_line in dev_lines:
-        if len(dev_line) == 0:
-            if device_type_match(dev, devices_type):
-                # Replace "Driver" with "Driver_str" to have consistency of
-                # of dictionary key names
-                if "Driver" in dev.keys():
-                    dev["Driver_str"] = dev.pop("Driver")
-                # use dict to make copy of dev
-                devices[dev["Slot"]] = dict(dev)
-            # Clear previous device's data
-            dev = {}
-        else:
-            name, value = dev_line.decode().split("\t", 1)
-            value_list = value.rsplit(' ', 1)
-            if len(value_list) > 1:
-                # String stored in <name>_str
-                dev[name.rstrip(":") + '_str'] = value_list[0]
-            # Numeric IDs
-            dev[name.rstrip(":")] = value_list[len(value_list) - 1] \
-                .rstrip("]").lstrip("[")
-
-    if devices_type == network_devices:
-        # check what is the interface if any for an ssh connection if
-        # any to this host, so we can mark it later.
-        ssh_if = []
-        route = check_output(["ip", "-o", "route"])
-        # filter out all lines for 169.254 routes
-        route = "\n".join(filter(lambda ln: not ln.startswith("169.254"),
-                             route.decode().splitlines()))
-        rt_info = route.split()
-        for i in range(len(rt_info) - 1):
-            if rt_info[i] == "dev":
-                ssh_if.append(rt_info[i+1])
-
-    # based on the basic info, get extended text details
-    for d in devices.keys():
-        if not device_type_match(devices[d], devices_type):
-            continue
-
-        # get additional info and add it to existing data
-        devices[d] = devices[d].copy()
-        # No need to probe lspci
-        devices[d].update(get_pci_device_details(d, False).items())
-
-        if devices_type == network_devices:
-            for _if in ssh_if:
-                if _if in devices[d]["Interface"].split(","):
-                    devices[d]["Ssh_if"] = True
-                    devices[d]["Active"] = "*Active*"
-                    break
-
-        # add igb_uio to list of supporting modules if needed
-        if "Module_str" in devices[d]:
-            for driver in dpdk_drivers:
-                if driver not in devices[d]["Module_str"]:
-                    devices[d]["Module_str"] = \
-                        devices[d]["Module_str"] + ",%s" % driver
-        else:
-            devices[d]["Module_str"] = ",".join(dpdk_drivers)
-
-        # make sure the driver and module strings do not have any duplicates
-        if has_driver(d):
-            modules = devices[d]["Module_str"].split(",")
-            if devices[d]["Driver_str"] in modules:
-                modules.remove(devices[d]["Driver_str"])
-                devices[d]["Module_str"] = ",".join(modules)
-
+def get_device_details(devices_type):  
+    """  
+    Populate the "devices" dictionary with PCI device information.  
+      
+    The keys are PCI addresses (domain:bus:slot.func) and values are  
+    dictionaries containing device properties for each NIC.  
+    """  
+    global devices  
+    global dpdk_drivers  
+  
+    # Parse lspci output to get basic device information  
+    devices = _parse_lspci_output(devices_type)  
+      
+    # Get SSH interface information for network devices  
+    ssh_if = _get_ssh_interfaces(devices_type)  
+      
+    # Enhance device details with additional information  
+    _enhance_device_details(devices, devices_type, ssh_if)  
+  
+def _parse_lspci_output(devices_type):  
+    """Parse lspci output to extract basic device information."""  
+    devices = {}  
+    dev = {}  
+    dev_lines = check_output(["lspci", "-Dvmmnnk"]).splitlines()  
+      
+    for dev_line in dev_lines:  
+        if len(dev_line) == 0:  
+            if device_type_match(dev, devices_type):  
+                # Replace "Driver" with "Driver_str" for consistency  
+                if "Driver" in dev.keys():  
+                    dev["Driver_str"] = dev.pop("Driver")  
+                devices[dev["Slot"]] = dict(dev)  
+            dev = {}  
+        else:  
+            name, value = dev_line.decode().split("\t", 1)  
+            value_list = value.rsplit(' ', 1)  
+            if len(value_list) > 1:  
+                # String stored in <name>_str  
+                dev[name.rstrip(":") + '_str'] = value_list[0]  
+            # Numeric IDs  
+            dev[name.rstrip(":")] = value_list[len(value_list) - 1].rstrip("]").lstrip("[")  
+      
+    return devices  
+  
+def _get_ssh_interfaces(devices_type):  
+    """Get list of network interfaces used for SSH connections."""  
+    if devices_type != network_devices:  
+        return []  
+      
+    ssh_if = []  
+    route = check_output(["ip", "-o", "route"])  
+    # Filter out 169.254 routes  
+    route = "\n".join(filter(lambda ln: not ln.startswith("169.254"),  
+                         route.decode().splitlines()))  
+    rt_info = route.split()  
+      
+    for i in range(len(rt_info) - 1):  
+        if rt_info[i] == "dev":  
+            ssh_if.append(rt_info[i+1])  
+      
+    return ssh_if  
+  
+def _enhance_device_details(devices, devices_type, ssh_if):  
+    """Add extended details to device information."""  
+    for d in devices.keys():  
+        if not device_type_match(devices[d], devices_type):  
+            continue  
+  
+        # Get additional info and add to existing data  
+        devices[d] = devices[d].copy()  
+        devices[d].update(get_pci_device_details(d, False).items())  
+  
+        # Mark SSH interfaces for network devices  
+        if devices_type == network_devices:  
+            _mark_ssh_interfaces(devices[d], ssh_if)  
+  
+        # Add DPDK driver information  
+        _add_dpdk_driver_info(devices[d])  
+  
+        # Remove duplicate driver entries  
+        _remove_duplicate_drivers(devices[d])  
+  
+def _mark_ssh_interfaces(device, ssh_if):  
+    """Mark interfaces that are used for SSH connections."""  
+    for _if in ssh_if:  
+        if _if in device["Interface"].split(","):  
+            device["Ssh_if"] = True  
+            device["Active"] = "*Active*"  
+            break  
+  
+def _add_dpdk_driver_info(device):  
+    """Add DPDK driver information to device."""  
+    if "Module_str" in device:  
+        for driver in dpdk_drivers:  
+            if driver not in device["Module_str"]:  
+                device["Module_str"] = device["Module_str"] + ",%s" % driver  
+    else:  
+        device["Module_str"] = ",".join(dpdk_drivers)  
+  
+def _remove_duplicate_drivers(device):  
+    """Remove current driver from module list to avoid duplicates."""  
+    if has_driver(device.get("Slot", "")):  
+        modules = device["Module_str"].split(",")  
+        if device["Driver_str"] in modules:  
+            modules.remove(device["Driver_str"])  
+            device["Module_str"] = ",".join(modules)
 
 def device_type_match(dev, devices_type):
     for i in range(len(devices_type)):
@@ -404,138 +438,144 @@ def unbind_one(dev_id, force):
     try:
         f = open(filename, "a")
     except:
-        print("Error: unbind failed for %s - Cannot open %s"
-              % (dev_id, filename))
+        print(UNBIND_OPEN_ERROR % (dev_id, filename))
         sys.exit(1)
     f.write(dev_id)
     f.close()
 
 
-def bind_one(dev_id, driver, force):
-    '''Bind the device given by "dev_id" to the driver "driver". If the device
-    is already bound to a different driver, it will be unbound first'''
-    dev = devices[dev_id]
-    saved_driver = None  # used to rollback any unbind in case of failure
-
-    # prevent disconnection of our ssh session
-    if dev["Ssh_if"] and not force:
-        print("Routing table indicates that interface %s is active. "
-              "Not modifying" % (dev_id))
-        return
-
-    # unbind any existing drivers we don't want
-    if has_driver(dev_id):
-        if dev["Driver_str"] == driver:
-            print("%s already bound to driver %s, skipping\n"
-                  % (dev_id, driver))
-            return
-        else:
-            saved_driver = dev["Driver_str"]
-            unbind_one(dev_id, force)
-            dev["Driver_str"] = ""  # clear driver string
-
-    # For kernels >= 3.15 driver_override can be used to specify the driver
-    # for a device rather than relying on the driver to provide a positive
-    # match of the device.  The existing process of looking up
-    # the vendor and device ID, adding them to the driver new_id,
-    # will erroneously bind other devices too which has the additional burden
-    # of unbinding those devices
-    if driver in dpdk_drivers:
-        filename = "/sys/bus/pci/devices/%s/driver_override" % dev_id
-        if os.path.exists(filename):
-            try:
-                f = open(filename, "w")
-            except OSError:
-                print("Error: bind failed for %s - Cannot open %s"
-                      % (dev_id, filename))
-                return
-            except Exception as e:
-                print("Error: bind failed for %s - Unexpected error opening %s: %s"
-                    % (dev_id, filename, e))
-                return
-            try:
-                f.write("%s" % driver)
-                f.close()
-            except OSError:
-                print("Error: bind failed for %s - Cannot write driver %s to "
-                      "PCI ID " % (dev_id, driver))
-                return
-            except Exception as e:
-                print("Error: bind failed for %s - Unexpected error writing driver %s: %s"
-                    % (dev_id, driver, e))
-                return
-        # For kernels < 3.15 use new_id to add PCI id's to the driver
-        else:
-            filename = "/sys/bus/pci/drivers/%s/new_id" % driver
-            try:
-                f = open(filename, "w")
-            except OSError:
-                print("Error: bind failed for %s - Cannot open %s"
-                      % (dev_id, filename))
-                return
-            except Exception as e:
-                print("Error: bind failed for %s - Unexpected error opening %s: %s"
-                    % (dev_id, filename, e))
-                return
-            try:
-                # Convert Device and Vendor Id to int to write to new_id
-                f.write("%04x %04x" % (int(dev["Vendor"],16),
-                        int(dev["Device"], 16)))
-                f.close()
-            except OSError:
-                print("Error: bind failed for %s - Cannot write new PCI ID to "
-                      "driver %s" % (dev_id, driver))
-                return
-            except Exception as e:
-                print("Error: bind failed for %s - Unexpected error writing to driver %s: %s"
-                    % (dev_id, driver, e))
-                return
-
-    # do the bind by writing to /sys
-    filename = "/sys/bus/pci/drivers/%s/bind" % driver
-    try:
-        f = open(filename, "a")
-    except:
-        print("Error: bind failed for %s - Cannot open %s"
-              % (dev_id, filename))
-        if saved_driver is not None:  # restore any previous driver
-            bind_one(dev_id, saved_driver, force)
-        return
-    try:
-        f.write(dev_id)
-        f.close()
-    except:
-        # for some reason, closing dev_id after adding a new PCI ID to new_id
-        # results in IOError. however, if the device was successfully bound,
-        # we don't care for any errors and can safely ignore IOError
-        tmp = get_pci_device_details(dev_id, True)
-        if "Driver_str" in tmp and tmp["Driver_str"] == driver:
-            return
-        print("Error: bind failed for %s - Cannot bind to driver %s"
-              % (dev_id, driver))
-        if saved_driver is not None:  # restore any previous driver
-            bind_one(dev_id, saved_driver, force)
-        return
-
-    # For kernels > 3.15 driver_override is used to bind a device to a driver.
-    # Before unbinding it, overwrite driver_override with empty string so that
-    # the device can be bound to any other driver
-    filename = "/sys/bus/pci/devices/%s/driver_override" % dev_id
-    if os.path.exists(filename):
-        try:
-            f = open(filename, "w")
-        except:
-            print("Error: unbind failed for %s - Cannot open %s"
-                  % (dev_id, filename))
+def bind_one(dev_id, driver, force):  
+    """  
+    Bind the device given by "dev_id" to the driver "driver". If the device  
+    is already bound to a different driver, it will be unbound first  
+    """  
+    dev = devices[dev_id]  
+    saved_driver = None  # used to rollback any unbind in case of failure  
+  
+    # Check if we can modify this device  
+    if not _can_modify_device(dev, dev_id, force):  
+        return  
+  
+    # Handle existing driver binding  
+    saved_driver = _handle_existing_driver(dev, dev_id, driver, force)  
+    if saved_driver is False:  # Early return if already bound to correct driver  
+        return  
+  
+    # Bind the device to the new driver  
+    if driver in dpdk_drivers:  
+        _bind_dpdk_driver(dev_id, driver)  
+    else:  
+        _bind_kernel_driver(dev_id, driver, saved_driver, force)  
+  
+    # Perform the cleanup  
+    _cleanup_driver_override(dev_id)  
+  
+def _can_modify_device(dev, dev_id, force):  
+    """Check if the device can be modified."""  
+    if dev["Ssh_if"] and not force:  
+        print("Routing table indicates that interface %s is active. "  
+              "Not modifying" % (dev_id))  
+        return False  
+    return True  
+  
+def _handle_existing_driver(dev, dev_id, driver, force):  
+    """Handle existing driver binding, return saved driver or False."""  
+    if has_driver(dev_id):  
+        if dev["Driver_str"] == driver:  
+            print("%s already bound to driver %s, skipping\n"  
+                  % (dev_id, driver))  
+            return False  
+        else:  
+            saved_driver = dev["Driver_str"]  
+            unbind_one(dev_id, force)  
+            dev["Driver_str"] = ""  # clear driver string  
+            return saved_driver  
+    return None  
+  
+def _bind_dpdk_driver(dev_id, driver):  
+    """Bind device to DPDK driver using driver_override or new_id."""  
+    filename = "/sys/bus/pci/devices/%s/driver_override" % dev_id  
+    if os.path.exists(filename):  
+        _write_driver_override(filename, driver, dev_id)  
+    else:  
+        _write_new_id(dev_id, driver)  
+  
+def _write_driver_override(filename, driver, dev_id):  
+    """Write driver to driver_override file."""  
+    try:  
+        f = open(filename, "w")  
+    except (IOError, OSError) as e:  
+        print("Error: bind failed for %s - Cannot open %s"  
+              % (dev_id, filename))  
+        return  
+    try:  
+        f.write("%s" % driver)  
+        f.close()  
+    except (IOError, OSError) as e:  
+        print("Error: bind failed for %s - Cannot write driver %s to "  
+              "PCI ID " % (dev_id, driver)) 
+  
+def _write_new_id(dev_id, driver):  
+    """Write device ID to driver's new_id file."""  
+    dev = devices[dev_id]  
+    filename = "/sys/bus/pci/drivers/%s/new_id" % driver  
+    try:  
+        f = open(filename, "w")  
+    except (IOError, OSError) as e:  
+        print("Error: bind failed for %s - Cannot open %s"  
+              % (dev_id, filename))  
+        return  
+    try:  
+        # Convert Device and Vendor Id to int to write to new_id  
+        f.write("%04x %04x" % (int(dev["Vendor"],16),  
+                int(dev["Device"], 16)))  
+        f.close()  
+    except (IOError, OSError) as e:  
+        print("Error: bind failed for %s - Cannot write new PCI ID to "  
+              "driver %s" % (dev_id, driver))  
+  
+def _bind_kernel_driver(dev_id, driver, saved_driver, force):  
+    """Bind device to kernel driver."""  
+    filename = "/sys/bus/pci/drivers/%s/bind" % driver  
+    try:  
+        f = open(filename, "a")  
+    except (IOError, OSError) as e:  
+        print("Error: bind failed for %s - Cannot open %s"  
+              % (dev_id, filename))  
+        if saved_driver is not None:  # restore any previous driver  
+            bind_one(dev_id, saved_driver, force)  
+        return  
+    try:  
+        f.write(dev_id)  
+        f.close()  
+    except (IOError, OSError) as e:  
+        # Check if device was actually bound despite the error  
+        tmp = get_pci_device_details(dev_id, True)  
+        if "Driver_str" in tmp and tmp["Driver_str"] == driver:  
+            return  
+        print("Error: bind failed for %s - Cannot bind to driver %s"  
+              % (dev_id, driver))  
+        if saved_driver is not None:  # restore any previous driver  
+            bind_one(dev_id, saved_driver, force)  
+        return  
+  
+def _cleanup_driver_override(dev_id):  
+    """Clean up driver_override after binding."""  
+    filename = "/sys/bus/pci/devices/%s/driver_override" % dev_id  
+    if os.path.exists(filename):  
+        try:  
+            f = open(filename, "w")  
+        except (IOError, OSError) as e:  
+            print("Error: unbind failed for %s - Cannot open %s"  
+                  % (dev_id, filename))  
+            sys.exit(1)  
+        try:  
+            f.write("\00")  
+            f.close()  
+        except (IOError, OSError) as e:  
+            print("Error: unbind failed for %s - Cannot open %s"  
+                  % (dev_id, filename))  
             sys.exit(1)
-        try:
-            f.write("\00")
-            f.close()
-        except:
-            print("Error: unbind failed for %s - Cannot open %s"
-                  % (dev_id, filename))
-            sys.exit(1)
-
 
 def unbind_all(dev_list, force=False):
     """Unbind method, takes a list of device locations"""
@@ -566,7 +606,7 @@ def bind_all(dev_list, driver, force=False):
     # that are not bound to any other driver could be bound even if no one has
     # asked them to. hence, we check the list of drivers again, and see if
     # some of the previously-unbound devices were erroneously bound.
-    if not os.path.exists("/sys/bus/pci/devices/%s/driver_override" % d):
+    if not os.path.exists(DRIVER_OVERRIDE_PATH % d):
         for d in devices.keys():
             # skip devices that were already bound or that we know should be bound
             if "Driver_str" in devices[d] or d in dev_list:
@@ -647,48 +687,82 @@ def show_status():
     if status_dev == "mempool" or status_dev == "all":
         show_device_status(mempool_devices, "Mempool")
 
-def parse_args():
-    '''Parses the command-line arguments given by the user and takes the
-    appropriate action for each'''
-    global b_flag
-    global status_flag
-    global status_dev
-    global force_flag
-    global args
-    if len(sys.argv) <= 1:
-        usage()
-        sys.exit(0)
-
-    try:
-        opts, args = getopt.getopt(sys.argv[1:], "b:us",
-                                   ["help", "usage", "status", "status-dev=",
-                                    "force", "bind=", "unbind", ])
-    except getopt.GetoptError as error:
-        print(str(error))
-        print("Run '%s --usage' for further information" % sys.argv[0])
-        sys.exit(1)
-
-    for opt, arg in opts:
-        if opt == "--help" or opt == "--usage":
-            usage()
-            sys.exit(0)
-        if opt == "--status-dev":
-            status_flag = True
-            status_dev = arg
-        if opt == "--status" or opt == "-s":
-            status_flag = True
-            status_dev = "all"
-        if opt == "--force":
-            force_flag = True
-        if opt == "-b" or opt == "-u" or opt == "--bind" or opt == "--unbind":
-            if b_flag is not None:
-                print("Error - Only one bind or unbind may be specified\n")
-                sys.exit(1)
-            if opt == "-u" or opt == "--unbind":
-                b_flag = "none"
-            else:
-                b_flag = arg
-
+def parse_args():  
+    '''Parses the command-line arguments given by the user and takes the  
+    appropriate action for each'''  
+    global b_flag  
+    global status_flag  
+    global status_dev  
+    global force_flag  
+    global args  
+      
+    if len(sys.argv) <= 1:  
+        usage()  
+        sys.exit(0)  
+  
+    opts, args = _parse_command_line_options()  
+    _process_parsed_options(opts)  
+      
+def _parse_command_line_options():  
+    """Parse command line options using getopt."""  
+    try:  
+        opts, args = getopt.getopt(sys.argv[1:], "b:us",  
+                                   ["help", "usage", "status", "status-dev=",  
+                                    "force", "bind=", "unbind", ])  
+    except getopt.GetoptError as error:  
+        print(str(error))  
+        print("Run '%s --usage' for further information" % sys.argv[0])  
+        sys.exit(1)  
+    return opts, args  
+      
+def _process_parsed_options(opts):  
+    """Process the parsed command line options."""  
+    global b_flag  
+    global status_flag  
+    global status_dev  
+    global force_flag  
+      
+    for opt, arg in opts:  
+        if opt in ["--help", "--usage"]:  
+            _handle_help_option()  
+        elif opt == "--status-dev":  
+            _handle_status_dev_option(arg)  
+        elif opt in ["--status", "-s"]:  
+            _handle_status_option()  
+        elif opt == "--force":  
+            force_flag = True  
+        elif opt in ["-b", "-u", "--bind", "--unbind"]:  
+            _handle_bind_option(opt, arg)  
+              
+def _handle_help_option():  
+    """Handle help/usage options."""  
+    usage()  
+    sys.exit(0)  
+      
+def _handle_status_dev_option(arg):  
+    """Handle status-dev option."""  
+    global status_flag  
+    global status_dev  
+    status_flag = True  
+    status_dev = arg  
+      
+def _handle_status_option():  
+    """Handle status option."""  
+    global status_flag  
+    global status_dev  
+    status_flag = True  
+    status_dev = "all"  
+      
+def _handle_bind_option(opt, arg):  
+    """Handle bind/unbind options."""  
+    global b_flag  
+    if b_flag is not None:  
+        print("Error - Only one bind or unbind may be specified\n")  
+        sys.exit(1)  
+    if opt in ["-u", "--unbind"]:  
+        b_flag = "none"  
+    else:  
+        b_flag = arg
 
 def do_arg_actions():
     '''do the actual action requested by the user'''
@@ -700,12 +774,12 @@ def do_arg_actions():
     if b_flag is None and not status_flag:
         print("Error: No action specified for devices."
               "Please give a -b or -u option")
-        print("Run '%s --usage' for further information" % sys.argv[0])
+        print(USAGE_INFO % sys.argv[0])
         sys.exit(1)
 
     if b_flag is not None and len(args) == 0:
         print("Error: No devices specified.")
-        print("Run '%s --usage' for further information" % sys.argv[0])
+        print(USAGE_INFO % sys.argv[0])
         sys.exit(1)
 
     if b_flag == "none" or b_flag == "None":
