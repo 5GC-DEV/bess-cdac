@@ -153,138 +153,83 @@ def dict_to_protobuf(pb_klass_or_instance, values, type_callable_map=REVERSE_TYP
     return _dict_to_protobuf(instance, values, type_callable_map, strict)
 
 
-def _get_field_mapping(pb, dict_value, strict):  
-    """  
-    Create a mapping of dictionary values to protobuf fields.  
-      
-    Args:  
-        pb: Protobuf message instance  
-        dict_value: Dictionary containing field values  
-        strict: Whether to raise errors for unknown fields  
-          
-    Returns:  
-        list: List of (field, input_value, pb_value) tuples  
-    """  
-    field_mapping = []  
-      
-    # Process regular fields  
-    _process_regular_fields(pb, dict_value, strict, field_mapping)  
-      
-    # Process extension fields  
-    _process_extension_fields(pb, dict_value, strict, field_mapping)  
-      
-    return field_mapping  
-  
-def _process_regular_fields(pb, dict_value, strict, field_mapping):  
-    """Process regular (non-extension) fields from dictionary."""  
-    for key, value in dict_value.items():  
-        if key == EXTENSION_CONTAINER:  
-            continue  
-              
-        if key not in pb.DESCRIPTOR.fields_by_name:  
-            if strict:  
-                raise KeyError("%s does not have a field called %s" %  
-                               (pb.__class__.__name__, key))  
-            continue  
-              
-        field_mapping.append((pb.DESCRIPTOR.fields_by_name[key],   
-                             value,   
-                             getattr(pb, key, None)))  
-  
-def _process_extension_fields(pb, dict_value, strict, field_mapping):  
-    """Process extension fields from dictionary."""  
-    for ext_num, ext_val in dict_value.get(EXTENSION_CONTAINER, {}).items():  
-        try:  
-            ext_num = int(ext_num)  
-        except ValueError:  
-            raise ValueError("Extension keys must be integers.")  
-              
-        if ext_num not in pb._extensions_by_number:  
-            if strict:  
-                raise KeyError("%s does not have a extension with number %s. "  
-                               "Perhaps you forgot to import it?" %  
-                               (pb.__class__.__name__, ext_num))  
-            continue  
-              
-        ext_field = pb._extensions_by_number[ext_num]  
-        pb_val = pb.Extensions[ext_field]  
+def _get_field_mapping(pb, dict_value, strict):
+    field_mapping = []
+    for key, value in dict_value.items():
+        if key == EXTENSION_CONTAINER:
+            continue
+        if key not in pb.DESCRIPTOR.fields_by_name:
+            if strict:
+                raise KeyError("%s does not have a field called %s" %
+                               (pb.__class__.__name__, key))
+            continue
+        field_mapping.append((pb.DESCRIPTOR.fields_by_name[
+                             key], value, getattr(pb, key, None)))
+
+    for ext_num, ext_val in dict_value.get(EXTENSION_CONTAINER, {}).items():
+        try:
+            ext_num = int(ext_num)
+        except ValueError:
+            raise ValueError("Extension keys must be integers.")
+        if ext_num not in pb._extensions_by_number:
+            if strict:
+                raise KeyError("%s does not have a extension with number %s. "
+                               "Perhaps you forgot to import it?" %
+                               (pb.__class__.__name__, key))
+            continue
+        ext_field = pb._extensions_by_number[ext_num]
+        pb_val = pb.Extensions[ext_field]
         field_mapping.append((ext_field, ext_val, pb_val))
 
-def _dict_to_protobuf(pb, value, type_callable_map, strict):  
-    """  
-    Convert dictionary values to protobuf message fields.  
-      
-    Args:  
-        pb: Protobuf message instance to populate  
-        value: Dictionary containing field values  
-        type_callable_map: Type conversion mappings  
-        strict: Whether to enforce strict field validation  
-          
-    Returns:  
-        The populated protobuf message  
-    """  
-    fields = _get_field_mapping(pb, value, strict)  
-    basestr = _get_base_string_type()  
-  
-    for field, input_value, pb_value in fields:  
-        if field.label == FieldDescriptor.LABEL_REPEATED:  
-            _process_repeated_field(field, input_value, pb_value, type_callable_map, strict, basestr)  
-        elif field.type == FieldDescriptor.TYPE_MESSAGE:  
-            _process_message_field(pb_value, input_value, type_callable_map, strict)  
-        else:  
-            _process_scalar_field(pb, field, input_value, type_callable_map, basestr)  
-  
-    return pb  
-  
-def _get_base_string_type():  
-    """Get the appropriate base string type for Python 2/3 compatibility."""  
-    if sys.version_info[0] == 2:  
-        return basestring  
-    else:  
-        return str  
-  
-def _process_repeated_field(field, input_value, pb_value, type_callable_map, strict, basestr):  
-    if field.message_type and field.message_type.has_options and field.message_type.GetOptions().map_entry:  
-        # Handle map fields  
-        _process_map_field(field, input_value, pb_value, type_callable_map, strict)  
-    else:  
-        # Handle regular list fields  
-        _process_list_field(field, input_value, pb_value, type_callable_map, basestr, strict) 
-  
-def _process_map_field(input_value, pb_value, type_callable_map, strict):  
-    """Process map fields (key-value pairs)."""  
-    if isinstance(input_value, dict) and all([isinstance(x, dict) for x in input_value.values()]):  
-        for k, v in input_value.items():  
-            _dict_to_protobuf(pb_value[k], input_value[k], type_callable_map, strict)  
-    else:  
-        pb_value.update(input_value)  
-  
-def _process_list_field(field, input_value, pb_value, type_callable_map, basestr, strict):  
-    """Process list fields (repeated scalar values or messages)."""  
-    for item in input_value:  
-        if field.type == FieldDescriptor.TYPE_MESSAGE:  
-            m = pb_value.add()  
-            _dict_to_protobuf(m, item, type_callable_map, strict)  
-        elif field.type == FieldDescriptor.TYPE_ENUM and isinstance(item, basestr):  
-            pb_value.append(_string_to_enum(field, item))  
-        else:  
-            pb_value.append(item)
-  
-def _process_message_field(pb_value, input_value, type_callable_map, strict):  
-    """Process nested message fields."""  
-    _dict_to_protobuf(pb_value, input_value, type_callable_map, strict)  
-  
-def _process_scalar_field(pb, field, input_value, type_callable_map, basestr):  
-    """Process scalar fields (int, string, bool, enum, etc.)."""  
-    if field.type in type_callable_map:  
-        input_value = type_callable_map[field.type](input_value)  
-  
-    if field.is_extension:  
-        pb.Extensions[field] = input_value  
-    elif field.type == FieldDescriptor.TYPE_ENUM and isinstance(input_value, basestr):  
-        input_value = _string_to_enum(field, input_value)  
-      
-    setattr(pb, field.name, input_value)
+    return field_mapping
+
+
+def _dict_to_protobuf(pb, value, type_callable_map, strict):
+    fields = _get_field_mapping(pb, value, strict)
+
+    if sys.version_info[0] == 2:
+        basestr = basestring
+    else:
+        basestr = str
+
+    for field, input_value, pb_value in fields:
+        if field.label == FieldDescriptor.LABEL_REPEATED:
+            if field.message_type and field.message_type.has_options and \
+                   field.message_type.GetOptions().map_entry:
+                # Special processing for nested dict
+                if isinstance(input_value, dict) and all([isinstance(x, dict) for x in input_value.values()]):
+                    for k, v in input_value.items():
+                        _dict_to_protobuf(
+                            pb_value[k], input_value[k], type_callable_map, strict)
+                else:
+                    pb_value.update(input_value)
+                continue
+            for item in input_value:
+                if field.type == FieldDescriptor.TYPE_MESSAGE:
+                    m = pb_value.add()
+                    _dict_to_protobuf(m, item, type_callable_map, strict)
+                elif field.type == FieldDescriptor.TYPE_ENUM and isinstance(item, basestr):
+                    pb_value.append(_string_to_enum(field, item))
+                else:
+                    pb_value.append(item)
+            continue
+        if field.type == FieldDescriptor.TYPE_MESSAGE:
+            _dict_to_protobuf(pb_value, input_value, type_callable_map, strict)
+            continue
+
+        if field.type in type_callable_map:
+            input_value = type_callable_map[field.type](input_value)
+
+        if field.is_extension:
+            pb.Extensions[field] = input_value
+            continue
+
+        if field.type == FieldDescriptor.TYPE_ENUM and isinstance(input_value, basestr):
+            input_value = _string_to_enum(field, input_value)
+
+        setattr(pb, field.name, input_value)
+
+    return pb
 
 
 def _string_to_enum(field, input_value):
