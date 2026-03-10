@@ -10,17 +10,17 @@
 // #fd151b vivid red
 
 // (node name, gate type, gate ID) -> [(timestamp, pkts, bits, cnt), ...]
-var stats = {};
+const stats = {};
 
-var opt_field;
-var opt_mode;
-var opt_humanreadable;
+let opt_field;  
+let opt_mode;  
+let opt_humanreadable;
 
 function gates_to_str(gates, gate_type) {
-    var ret = '';
+    let ret = '';
 
-    for (var i = 0; i < gates.length; i++) {
-        var gate_num = gates[i][gate_type]
+    for (let i = 0; i < gates.length; i++) {
+        const gate_num = gates[i][gate_type]
         if (gate_type == 'igate') {
             color = '#437f97'
         } else {
@@ -43,10 +43,10 @@ function gates_to_str(gates, gate_type) {
 }
 
 function add_datapoints(stats, module_name, gates, gate_type) {
-    for (var i = 0; i < gates.length; i++) {
-        var gate = gates[i];
-        var key = [module_name, gate_type, gate[gate_type]];
-        var value = {timestamp: gate.timestamp,
+    for (let i = 0; i < gates.length; i++) {
+        const gate = gates[i];
+        const key = [module_name, gate_type, gate[gate_type]];
+        const value = {timestamp: gate.timestamp,
                  bits: Number(gate.bytes * 8),
                  pkts: Number(gate.pkts),
                  cnt: Number(gate.cnt),
@@ -60,9 +60,9 @@ function add_datapoints(stats, module_name, gates, gate_type) {
 }
 
 function get_edge_label(stats) {
-    var num_stats = stats.length;
-    var value = stats[num_stats - 1];
-    var label = '?'
+    const num_stats = stats.length;  
+    const value = stats[num_stats - 1];  
+    let label = '?'  
 
     if (value.timestamp > 0) {
         switch (opt_mode) {
@@ -91,7 +91,7 @@ function get_edge_label(stats) {
     }
 
     if ((typeof label == 'number') && opt_humanreadable) {
-        var unit = ' ';
+        let unit = ' ';
         if (opt_mode == 'rate') {
             if (label > 1000000000) {
                 label /= 1000000000;
@@ -121,9 +121,9 @@ function graph_to_dot(modules) {
     opt_mode = document.querySelector('input[name="mode"]:checked').value;
     opt_humanreadable = document.querySelector('input[name="humanreadable"]').checked;
 
-    var nodes = '';
-    for (var module_name in modules) {
-	var module = modules[module_name];
+    let nodes = '';
+    for (const module_name in modules) {
+	const module = modules[module_name];
 	// no need to collect igate data since we don't show them yet.
         // add_datapoints(stats, module_name, module.igates, 'igate')
         add_datapoints(stats, module_name, module.ogates, 'ogate')
@@ -133,9 +133,9 @@ function graph_to_dot(modules) {
         module.show_ogates = module.ogates.length > 1 ||
             (module.ogates.length == 1 && module.ogates[0].ogate != 0);
 
-        var desc = module.desc ? `<font point-size="9">${module.desc}</font>` : '';
-        var igates = module.show_igates ? gates_to_str(module.igates, 'igate') : '';
-        var ogates = module.show_ogates ? gates_to_str(module.ogates, 'ogate') : '';
+        const desc = module.desc ? `<font point-size="9">${module.desc}</font>` : '';
+        const igates = module.show_igates ? gates_to_str(module.igates, 'igate') : '';
+        const ogates = module.show_ogates ? gates_to_str(module.ogates, 'ogate') : '';
 
         nodes += `
   "${module_name}" [shape=plaintext label=
@@ -153,16 +153,16 @@ function graph_to_dot(modules) {
 `;
     }
 
-    var edges = '';
+    let edges = '';
     for (module_name in modules) {
-        var module = modules[module_name];
-        for (var i = 0; i < module.ogates.length; i++) {
-            var gate = module.ogates[i];
-            var dst_module = modules[gate.name];
-            var out_port = module.show_ogates ? `ogate${gate.ogate}:s` : 'mod';
-            var in_port = dst_module.show_igates ? `igate${gate.igate}:n` : 'mod';
+        const module = modules[module_name];
+        for (let i = 0; i < module.ogates.length; i++) {
+            const gate = module.ogates[i];
+            const dst_module = modules[gate.name];
+            const out_port = module.show_ogates ? `ogate${gate.ogate}:s` : 'mod';
+            const in_port = dst_module.show_igates ? `igate${gate.igate}:n` : 'mod';
 
-            var label = get_edge_label(stats[[module_name, 'ogate', gate.ogate]]);
+            let label = get_edge_label(stats[[module_name, 'ogate', gate.ogate]]);
             if (label != '') {
                 label = ` [label=${label}]`;
             }
