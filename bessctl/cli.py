@@ -69,42 +69,47 @@ class CLI(object):
     class InternalError(Exception):
         pass
 
-    def __init__(self, cmdlist, fin=sys.stdin, fout=sys.stdout, ferr=None,
-                 interactive=None, history_file=None):
-        self.cmdlist = cmdlist
-
-        self.fin = fin
-        self.fout = fout
-        self.last_cmd = ''
-        self.rl = None
-
-        if history_file is None:
-            try:
-                self.history_file = os.path.expanduser('~/.bess_history')
-            except OSError:
-                self.history_file = None
-            except Exception as e:
-                print(f"Warning: Unexpected error with history file: {e}")
-                self.history_file = None
-        else:
-            self.history_file = history_file
-
-        # Colorize output to standard error
-        if ferr is None:
-            if os.environ.get('TERM') != 'dumb' and sys.stderr.isatty():
-                self.ferr = ColorizedOutput(sys.stderr, '\033[31m')  # dark red
-            else:
-                self.ferr = sys.stderr
-        else:
-            self.ferr = ferr
-
-        if interactive is None:
-            self.interactive = fin.isatty() and fout.isatty()
-        else:
-            self.interactive = interactive
-
-        if self.interactive:
-            self.go_interactive()
+    def __init__(self, cmdlist, fin=sys.stdin, fout=sys.stdout, ferr=None,  
+                interactive=None, history_file=None):  
+        self.cmdlist = cmdlist  
+        self.fin = fin  
+        self.fout = fout  
+        self.last_cmd = ''  
+        self.rl = None  
+        
+        self.history_file = self._setup_history_file(history_file)  
+        self.ferr = self._setup_error_output(ferr)  
+        self.interactive = self._setup_interactive_mode(interactive, fin, fout)  
+        
+        if self.interactive:  
+            self.go_interactive()  
+    
+    def _setup_history_file(self, history_file):  
+        """Setup history file path with fallback to default."""  
+        if history_file is not None:  
+            return history_file  
+        
+        try:  
+            return os.path.expanduser('~/.bess_history')  
+        except:  
+            return None  
+    
+    def _setup_error_output(self, ferr):  
+        """Setup error output with colorization support."""  
+        if ferr is not None:  
+            return ferr  
+        
+        if os.environ.get('TERM') != 'dumb' and sys.stderr.isatty():  
+            return ColorizedOutput(sys.stderr, '\033[31m')  # dark red
+        
+        return sys.stderr  
+    
+    def _setup_interactive_mode(self, interactive, fin, fout):  
+        """Determine if CLI should run in interactive mode."""  
+        if interactive is not None:  
+            return interactive  
+        
+        return fin.isatty() and fout.isatty()
 
     def err(self, msg):
         self.ferr.write('*** Error: %s\n' % msg)
