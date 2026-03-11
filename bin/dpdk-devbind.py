@@ -40,6 +40,12 @@ import getopt
 import subprocess
 from os.path import exists, abspath, dirname, basename
 
+# constants for duplicate literals
+UNBIND_OPEN_ERROR = "Error: unbind failed for %s - Cannot open %s"  
+BIND_OPEN_ERROR = "Error: bind failed for %s - Cannot open %s"  
+DRIVER_OVERRIDE_PATH = "/sys/bus/pci/devices/%s/driver_override" 
+USAGE_INFO = "Run '%s --usage' for further information" 
+
 # The PCI base class for all devices
 network_class = {'Class': '02', 'Vendor': None, 'Device': None,
                     'SVendor': None, 'SDevice': None}
@@ -404,8 +410,7 @@ def unbind_one(dev_id, force):
     try:
         f = open(filename, "a")
     except:
-        print("Error: unbind failed for %s - Cannot open %s"
-              % (dev_id, filename))
+        print(UNBIND_OPEN_ERROR % (dev_id, filename))
         sys.exit(1)
     f.write(dev_id)
     f.close()
@@ -441,12 +446,12 @@ def bind_one(dev_id, driver, force):
     # will erroneously bind other devices too which has the additional burden
     # of unbinding those devices
     if driver in dpdk_drivers:
-        filename = "/sys/bus/pci/devices/%s/driver_override" % dev_id
+        filename = DRIVER_OVERRIDE_PATH % dev_id
         if os.path.exists(filename):
             try:
                 f = open(filename, "w")
             except OSError:
-                print("Error: bind failed for %s - Cannot open %s"
+                print(BIND_OPEN_ERROR
                       % (dev_id, filename))
                 return
             except Exception as e:
@@ -470,7 +475,7 @@ def bind_one(dev_id, driver, force):
             try:
                 f = open(filename, "w")
             except OSError:
-                print("Error: bind failed for %s - Cannot open %s"
+                print(BIND_OPEN_ERROR
                       % (dev_id, filename))
                 return
             except Exception as e:
@@ -496,7 +501,7 @@ def bind_one(dev_id, driver, force):
     try:
         f = open(filename, "a")
     except:
-        print("Error: bind failed for %s - Cannot open %s"
+        print(BIND_OPEN_ERROR
               % (dev_id, filename))
         if saved_driver is not None:  # restore any previous driver
             bind_one(dev_id, saved_driver, force)
@@ -520,19 +525,19 @@ def bind_one(dev_id, driver, force):
     # For kernels > 3.15 driver_override is used to bind a device to a driver.
     # Before unbinding it, overwrite driver_override with empty string so that
     # the device can be bound to any other driver
-    filename = "/sys/bus/pci/devices/%s/driver_override" % dev_id
+    filename = DRIVER_OVERRIDE_PATH % dev_id
     if os.path.exists(filename):
         try:
             f = open(filename, "w")
         except:
-            print("Error: unbind failed for %s - Cannot open %s"
+            print(UNBIND_OPEN_ERROR
                   % (dev_id, filename))
             sys.exit(1)
         try:
             f.write("\00")
             f.close()
         except:
-            print("Error: unbind failed for %s - Cannot open %s"
+            print(UNBIND_OPEN_ERROR
                   % (dev_id, filename))
             sys.exit(1)
 
@@ -566,7 +571,7 @@ def bind_all(dev_list, driver, force=False):
     # that are not bound to any other driver could be bound even if no one has
     # asked them to. hence, we check the list of drivers again, and see if
     # some of the previously-unbound devices were erroneously bound.
-    if not os.path.exists("/sys/bus/pci/devices/%s/driver_override" % d):
+    if not os.path.exists(DRIVER_OVERRIDE_PATH % d):
         for d in devices.keys():
             # skip devices that were already bound or that we know should be bound
             if "Driver_str" in devices[d] or d in dev_list:
@@ -665,7 +670,7 @@ def parse_args():
                                     "force", "bind=", "unbind", ])
     except getopt.GetoptError as error:
         print(str(error))
-        print("Run '%s --usage' for further information" % sys.argv[0])
+        print(USAGE_INFO % sys.argv[0])
         sys.exit(1)
 
     for opt, arg in opts:
@@ -700,12 +705,12 @@ def do_arg_actions():
     if b_flag is None and not status_flag:
         print("Error: No action specified for devices."
               "Please give a -b or -u option")
-        print("Run '%s --usage' for further information" % sys.argv[0])
+        print(USAGE_INFO % sys.argv[0])
         sys.exit(1)
 
     if b_flag is not None and len(args) == 0:
         print("Error: No devices specified.")
-        print("Run '%s --usage' for further information" % sys.argv[0])
+        print(USAGE_INFO % sys.argv[0])
         sys.exit(1)
 
     if b_flag == "none" or b_flag == "None":
