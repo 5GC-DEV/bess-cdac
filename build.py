@@ -45,6 +45,9 @@ import subprocess
 import textwrap
 import argparse
 
+# constants for duplicate literals
+BUILD_DIR_FORMAT = '%s/build' 
+BUILTIN_PB_DIR = 'pybess/builtin_pb'
 
 def cmd(cmd, quiet=False, shell=False):
     """
@@ -98,7 +101,7 @@ DPDK_TARGET = 'x86_64-native-linuxapp-gcc'
 kernel_release = cmd('uname -r', quiet=True).strip()
 
 DPDK_DIR = '%s/%s' % (DEPS_DIR, DPDK_VER)
-DPDK_BUILD = '%s/build' % DPDK_DIR
+DPDK_BUILD = BUILD_DIR_FORMAT % DPDK_DIR
 
 extra_libs = set()
 cxx_flags = []
@@ -293,7 +296,7 @@ def build_dpdk():
     download_dpdk(quiet=True)
 
     # not configured yet?
-    if not os.path.exists('%s/build' % DPDK_DIR):
+    if not os.path.exists(BUILD_DIR_FORMAT % DPDK_DIR):
         configure_dpdk()
 
     for f in glob.glob('%s/*.patch' % DEPS_DIR):
@@ -340,8 +343,8 @@ def generate_protobuf_files():
 
     print('Generating protobuf codes for pybess...')
     sys.stdout.flush()
-    gen_one_set_of_files('protobuf', 'pybess/builtin_pb')
-    gen_one_set_of_files('protobuf/tests', 'pybess/builtin_pb')
+    gen_one_set_of_files('protobuf', BUILTIN_PB_DIR)
+    gen_one_set_of_files('protobuf/tests', BUILTIN_PB_DIR)
     for path in plugins:
         gen_one_set_of_files(os.path.join(path, 'protobuf'),
                              'pybess/plugin_pb')
@@ -350,7 +353,7 @@ def generate_protobuf_files():
 def build_bess():
     check_essential()
 
-    if not os.path.exists('%s/build' % DPDK_DIR):
+    if not os.path.exists(BUILD_DIR_FORMAT % DPDK_DIR):
         build_dpdk()
 
     generate_protobuf_files()
@@ -394,7 +397,7 @@ def do_clean():
     print('Cleaning up...')
     cmd('make -C core clean')
     cmd('make -C core/kmod clean')
-    for path in ('pybess/builtin_pb', 'pybess/plugin_pb'):
+    for path in (BUILTIN_PB_DIR, 'pybess/plugin_pb'):
         cmd('rm -rf '
             '{path}/*_pb2.py* {path}/ports/*_pb2.py* '
             '{path}/__init__.pyc {path}/ports/__init__.pyc '
