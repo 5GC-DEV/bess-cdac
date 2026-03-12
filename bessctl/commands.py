@@ -66,6 +66,13 @@ except ImportError:
 # extention for configuration files.
 CONF_EXT = 'bess'
 
+# constants for duplicate literals
+VAR_TYPE_NAME_PLUS = 'name+'
+DONE_MESSAGE = 'Done.\n'
+NONE_MESSAGE = '(none)\n'
+FORMAT_16S_S = '%-16s %s\n'
+COMMANDS_FORMAT = '\t\t commands: %s\n'
+NO_COMMANDS_FORMAT = '\t\t (no commands)\n'
 
 # errors in configuration file
 class ConfError(Exception):
@@ -506,7 +513,7 @@ def split_var(cli, var_type, line):
             head = line[:pos]
             tail = line[pos:]
 
-    elif var_type in ['wid+', 'name+', 'map', 'pyobj', 'opts']:
+    elif var_type in ['wid+', VAR_TYPE_NAME_PLUS, 'map', 'pyobj', 'opts']:
         head = line
         tail = ''
 
@@ -577,7 +584,7 @@ def bind_var(cli, var_type, line):
         else:
             raise cli.BindError('"socket" must be a positive number')
 
-    elif var_type == 'name+':
+    elif var_type == VAR_TYPE_NAME_PLUS:
         val = sorted(list(set(head.split())))  # collect unique items
 
     elif var_type == 'confname':
@@ -724,7 +731,7 @@ def _do_start(cli, opts):
             cli.fout.write('You need root privilege to launch BESS daemon, '
                            'but "sudo" requires a password for this account.'
                            '\n')
-        subprocess.check_call(cmd, shell='True')
+        subprocess.check_call(cmd, shell=True) # expected bool value
     except subprocess.CalledProcessError:
         raise cli.CommandError('Cannot start BESS daemon')
     else:
@@ -740,7 +747,7 @@ def _do_start(cli, opts):
             raise cli.CommandError('Connection timed out')
 
     if cli.interactive:
-        cli.fout.write('Done.\n')
+        cli.fout.write(DONE_MESSAGE)
 
 
 @cmd('daemon start [BESSD_OPTS...]', 'Start BESS daemon in the local machine')
@@ -778,7 +785,7 @@ def _do_reset(cli):
     cli.bess.reset_all()
     cli.bess.resume_all()
     if cli.interactive:
-        cli.fout.write('Done.\n')
+        cli.fout.write(DONE_MESSAGE)
 
 
 @cmd('daemon reset', 'Remove all ports and modules in the pipeline')
@@ -793,7 +800,7 @@ def _do_stop(cli):
     cli.bess.pause_all()
     cli.bess.kill()
     if cli.interactive:
-        cli.fout.write('Done.\n')
+        cli.fout.write(DONE_MESSAGE)
 
 
 @cmd('daemon stop', 'Stop BESS daemon')
@@ -809,145 +816,183 @@ def _clear_pipeline(cli):
     cli.bess.reset_all()
 
 
-def _get_bess_module_and_port_creators(cli, rsvd):
-    """
-    Return module instance creators and port instance creators.
+def _collect_module_and_driver_names(cli):  
+    """Collect module class names and port driver names from BESS."""  
+    class_names = [str(i) for i in cli.bess.list_mclasses().names]  
+    driver_names = [str(i) for i in cli.bess.list_drivers().driver_names]  
+    return class_names, driver_names
 
-    A creator is, in effect, a class as if defined by:
-        class Foo(Module):
-            bess = bess
-            choose_arg = _choose_arg
-    (and similarly for a port creator but with Port as the base class).
-    The choose_arg function is internal, meant for use in the __init__
-    functions in the base classes; see class Module and class Port,
-    defined elsewhere.
+def _find_duplicate_names(rsvd, class_names, driver_names):  
+    """Find duplicate names between reserved names, modules, and drivers."""  
+    counts = collections.Counter(rsvd.keys())  
+    counts.update(class_names)  
+    counts.update(driver_names)  
+    return [k for k in counts if counts[k] > 1]
 
-    The rsvd argument is a dictionary of reserved names (see below).
-    """
-    creators = {}
+def _generate_duplicate_error_message(dups, rsvd, class_names, driver_names):  
+    """Generate detailed error message for duplicate names."""  
+    errors = []  
+    for name in dups:  
+        if name in rsvd:  
+            why = 'reserved name {} is used as '.format(name)  
+        else:  
+            why = 'name {} is used as '.format(name)  
+          
+        if name in class_names:  
+            if name in driver_names:  
+                why += 'both a module class and a port driver'  
+            else:  
+                why += 'a module class'  
+        else:  
+            why += 'a port driver'  
+        errors.append(why)  
+      
+    return 'duplicate names found: {}'.format('; '.join(errors))
 
-    # TODO(torek) cache these for performance, rebuild when needed
-
-    class_names = [str(i) for i in cli.bess.list_mclasses().names]
-    driver_names = [str(i) for i in cli.bess.list_drivers().driver_names]
-
-    # Duplicates, if they exist, represent a fault in what's been
-    # loaded into BESS.  In particular, at least for the moment,
-    # we cannot have the same name as both a module *and* a port,
-    # nor may they use any of the reserved names.
-    #
-    # We can assume that the C++ code has already forbidden
-    # using the same name twice as-module class or port-driver.
-    # But the C++ code does not have the restriction on using
-    # Foo() as *both* module *and* port-driver.
-    counts = collections.Counter(rsvd.keys())
-    counts.update(class_names)
-    counts.update(driver_names)
-    dups = [k for k in counts if counts[k] > 1]
-
-    if dups:
-        errors = []
-        for name in dups:
-            if name in rsvd:
-                why = 'reserved name {} is used as '.format(name)
-            else:
-                why = 'name {} is used as '.format(name)
-            if name in class_names:
-                if name in driver_names:
-                    why += 'both a module class and a port driver'
-                else:
-                    why += 'a module class'
-            else:
-                why += 'a port driver'
-            errors.append(why)
-        errors = 'duplicate names found: {}'.format('; '.join(errors))
-        raise cli.InternalError(errors)
-
-    for name in class_names:
-        creators[name] = type(str(name), (Module,),
-                              {'bess': cli.bess, 'choose_arg': _choose_arg})
-    for name in driver_names:
-        creators[name] = type(str(name), (Port,),
-                              {'bess': cli.bess, 'choose_arg': _choose_arg})
-
+def _create_module_creators(cli, class_names):  
+    """Create module class creators."""  
+    creators = {}  
+    for name in class_names:  
+        creators[name] = type(str(name), (Module,),  
+                              {'bess': cli.bess, 'choose_arg': _choose_arg})  
+    return creators  
+  
+def _create_port_creators(cli, driver_names):  
+    """Create port driver creators."""  
+    creators = {}  
+    for name in driver_names:  
+        creators[name] = type(str(name), (Port,),  
+                              {'bess': cli.bess, 'choose_arg': _choose_arg})  
     return creators
 
+def _get_bess_module_and_port_creators(cli, rsvd):  
+    """  
+    Return module instance creators and port instance creators.  
+  
+    A creator is, in effect, a class as if defined by:  
+        class Foo(Module):  
+            bess = bess  
+            choose_arg = _choose_arg  
+    (and similarly for a port creator but with Port as the base class).  
+    The choose_arg function is internal, meant for use in the __init__  
+    functions in the base classes; see class Module and class Port,  
+    defined elsewhere.  
+  
+    The rsvd argument is a dictionary of reserved names (see below).  
+    """  
+    # TODO(torek) cache these for performance, rebuild when needed  
+      
+    # Collect names from BESS  
+    class_names, driver_names = _collect_module_and_driver_names(cli)  
+      
+    # Check for duplicates  
+    dups = _find_duplicate_names(rsvd, class_names, driver_names)  
+    if dups:  
+        error_msg = _generate_duplicate_error_message(dups, rsvd, class_names, driver_names)  
+        raise cli.InternalError(error_msg)  
+      
+    # Create creators  
+    creators = {}  
+    creators.update(_create_module_creators(cli, class_names))  
+    creators.update(_create_port_creators(cli, driver_names))  
+      
+    return creators
 
 # NOTE: the name of this function is used below
-def _do_run_file(cli, conf_file):
-    try:
-        xformed = sugar.xform_file(conf_file)
-    except (IOError, OSError):
-        cli.err('Cannot open file %s' % conf_file)
+def _process_config_file(cli, conf_file):  
+    """Process and compile the configuration file."""  
+    try:  
+        xformed = sugar.xform_file(conf_file)  
+    except (IOError, OSError):  
+        cli.err('Cannot open file %s' % conf_file)  
+        raise cli.HandledError()  
+      
+    try:  
+        code = compile(xformed, conf_file, 'exec')  
+    except SyntaxError as e:  
+        _handle_syntax_error(cli, conf_file, e)  
+        raise cli.HandledError()  
+    except Exception as e:  
+        cli.err('Fail to compile bess config file (%s): %s ' % (conf_file, e))  
+        raise cli.HandledError()  
+      
+    return code
+
+def _handle_syntax_error(cli, conf_file, e):  
+    """Handle syntax errors in configuration files."""  
+    cli.err('\n  File "%s", line %d\n    %s\n    %s\nSyntaxError: %s' %  
+            (conf_file, e.lineno, e.text, ' ' * (e.offset - 1) + '^', e.msg))
+    
+def _prepare_pipeline_state(cli):  
+    """Prepare pipeline state for configuration execution."""  
+    if is_pipeline_empty(cli):  
+        cli.bess.pause_all()  
+        return True  
+    else:  
+        ret = warn(cli, 'The current pipeline will be reset.', _clear_pipeline)  
+        return ret is not False
+    
+def _handle_execution_exception(cli, e):  
+    """Handle exceptions during configuration execution."""  
+    cur_frame = inspect.currentframe()  
+    cur_func = inspect.getframeinfo(cur_frame).function  
+    t, v, tb = sys.exc_info()  
+    stack = traceback.extract_tb(tb)  
+  
+    while len(stack) > 0 and stack.pop(0)[2] != cur_func:  
+        pass  
+  
+    errmsg = 'Unhandled exception in the configuration script'  
+    cli.err('%s (most recent call last)' % errmsg)  
+    cli.ferr.write(''.join(traceback.format_list(stack)))  
+  
+    if isinstance(v, (cli.bess.Error, cli.bess.RPCError)):  
+        raise  
+    else:  
+        cli.ferr.write(''.join(traceback.format_exception_only(t, v)))  
         raise cli.HandledError()
-
-    new_globals = {
-        '__builtins__': __builtins__,
-        '__file__': conf_file,
-        'bess': cli.bess,
-        'ConfError': ConfError,
-        '__bess_env__': __bess_env__,
-        '__bess_module__': __bess_module__,
-        '__bess_creators__': None,   # will be replaced below
-    }
-
-    creators = _get_bess_module_and_port_creators(cli, new_globals)
-
-    # Creator names are used globally in scripts, so export them
-    # globally.  We keep them in __bess_creators__ for use in the
-    # test code as well, which wants to create its own new set of
-    # globals.
-    new_globals['__bess_creators__'] = creators
-    for name in creators:
-        new_globals[name] = creators[name]
-
-    try:
-        code = compile(xformed, conf_file, 'exec')
-    except SyntaxError as e:
-        # TODO: e.offset might be wrong if there's a correct syntactic
-        #       sugar in an erroneous line
-
-        # Mimic python's error reporting style
-        cli.err('\n  File "%s", line %d\n    %s\n    %s\nSyntaxError: %s' %
-                (conf_file, e.lineno, e.text, ' ' * (e.offset - 1) + '^', e.msg))
-        raise cli.HandledError()
-    except Exception as e:
-        cli.err('Fail to compile bess config file (%s): %s ' % (conf_file, e))
-        raise cli.HandledError()
-
-    if is_pipeline_empty(cli):
-        cli.bess.pause_all()
-    else:
-        ret = warn(cli, 'The current pipeline will be reset.', _clear_pipeline)
-        if ret is False:
-            return
-
-    try:
-        exec(code, new_globals)
-        if cli.interactive:
-            cli.fout.write('Done.\n')
-    except:
-        cur_frame = inspect.currentframe()
-        cur_func = inspect.getframeinfo(cur_frame).function
-        t, v, tb = sys.exc_info()
-        stack = traceback.extract_tb(tb)
-
-        while len(stack) > 0 and stack.pop(0)[2] != cur_func:
-            pass
-
-        errmsg = 'Unhandled exception in the configuration script'
-
-        cli.err('%s (most recent call last)' % errmsg)
-        cli.ferr.write(''.join(traceback.format_list(stack)))
-
-        if isinstance(v, (cli.bess.Error, cli.bess.RPCError)):
-            raise
-        else:
-            cli.ferr.write(''.join(traceback.format_exception_only(t, v)))
-            raise cli.HandledError()
-    finally:
-        if cli.bess.is_connected():
+    
+def _do_run_file(cli, conf_file):  
+    """Execute a BESS configuration file."""  
+    # Process and compile the configuration file  
+    code = _process_config_file(cli, conf_file)  
+      
+    # Prepare pipeline state  
+    if not _prepare_pipeline_state(cli):  
+        return  
+      
+    # Set up execution environment  
+    new_globals = _setup_execution_globals(cli, conf_file)  
+      
+    # Execute the configuration  
+    try:  
+        exec(code, new_globals)  
+        if cli.interactive:  
+            cli.fout.write('Done.\n')  
+    except:  
+        _handle_execution_exception(cli, sys.exc_info()[1])  
+    finally:  
+        if cli.bess.is_connected():  
             cli.bess.resume_all()
+
+def _setup_execution_globals(cli, conf_file):  
+    """Set up the global execution environment."""  
+    new_globals = {  
+        '__builtins__': __builtins__,  
+        '__file__': conf_file,  
+        'bess': cli.bess,  
+        'ConfError': ConfError,  
+        '__bess_env__': __bess_env__,  
+        '__bess_module__': __bess_module__,  
+        '__bess_creators__': None,  
+    }  
+      
+    creators = _get_bess_module_and_port_creators(cli, new_globals)  
+    new_globals['__bess_creators__'] = creators  
+    for name in creators:  
+        new_globals[name] = creators[name]  
+      
+    return new_globals
 
 
 def _run_file(cli, conf_file, env_map):
@@ -1236,43 +1281,65 @@ def _show_tcs_tree(cli, root):
         stack.extend(reversed(ret))
 
 
-def _build_tcs_tree(tcs):
-    nodes = {}
-    root = {"children": []}
-    for tc in tcs:
-        c_ = getattr(tc, 'class')
-        node = {}
-        node["children"] = []
-        node["name"] = c_.name
-        node["policy"] = c_.policy
-        node["show_list"] = []
-        nodes[c_.name] = node
+def _create_tc_node(tc):  
+    """Create a node for a traffic class."""  
+    c_ = getattr(tc, 'class')  
+    node = {  
+        "children": [],  
+        "name": c_.name,  
+        "policy": c_.policy,  
+        "show_list": []  
+    }  
+    return node, c_
 
-    for tc in tcs:
-        c_ = getattr(tc, 'class')
-
-        if tc.parent and tc.parent in nodes:
-            nodes[tc.parent]["children"].append(nodes[c_.name])
-        else:
+def _build_parent_child_relationships(tcs, nodes, root):  
+    """Build parent-child relationships between traffic classes."""  
+    for tc in tcs:  
+        c_ = getattr(tc, 'class')  
+          
+        if tc.parent and tc.parent in nodes:  
+            nodes[tc.parent]["children"].append(nodes[c_.name])  
+        else:  
             root["children"].append(nodes[c_.name])
 
-        nodes[c_.name]["show_list"].append(c_.policy)
+def _populate_show_list(tc, nodes):  
+    """Populate the show list for a traffic class based on its policy."""  
+    c_ = getattr(tc, 'class')  
+      
+    # Always add the policy  
+    nodes[c_.name]["show_list"].append(c_.policy)  
+      
+    # Handle parent-specific attributes  
+    if tc.parent and tc.parent in nodes:  
+        parent_policy = nodes[tc.parent]["policy"]  
+        if parent_policy == "weighted_fair" and c_.HasField("share"):  
+            nodes[c_.name]["show_list"].append("share: %d" % c_.share)  
+        elif parent_policy == "priority" and c_.HasField("priority"):  
+            nodes[c_.name]["show_list"].append("priority: %d" % c_.priority)  
+      
+    # Handle rate limiting policy  
+    if c_.policy == "rate_limit":  
+        nodes[c_.name]["show_list"].append(_limit_to_str(c_.limit))  
+        nodes[c_.name]["show_list"].append(_burst_to_str(c_.max_burst))
 
-        if tc.parent and tc.parent in nodes:
-            if (nodes[tc.parent]["policy"] == "weighted_fair" and
-                    c_.HasField("share")):
-                nodes[c_.name]["show_list"].append("share: %d" % c_.share)
-            elif (nodes[tc.parent]["policy"] == "priority" and
-                    c_.HasField("priority")):
-                nodes[c_.name]["show_list"].append(
-                    "priority: %d" % c_.priority)
-
-        if c_.policy == "rate_limit":
-            nodes[c_.name]["show_list"].append(_limit_to_str(c_.limit))
-            nodes[c_.name]["show_list"].append(_burst_to_str(c_.max_burst))
-
+def _build_tcs_tree(tcs):  
+    """Build a tree structure from traffic classes."""  
+    nodes = {}  
+    root = {"children": []}  
+      
+    # Create all nodes  
+    for tc in tcs:  
+        node, c_ = _create_tc_node(tc)  
+        nodes[c_.name] = node  
+      
+    # Build parent-child relationships  
+    _build_parent_child_relationships(tcs, nodes, root)  
+      
+    # Populate show lists  
+    for tc in tcs:  
+        _populate_show_list(tc, nodes)  
+      
     return root
-
 
 @cmd('check constraints', 'Check constraints')
 def check_constraints(cli):
@@ -1330,32 +1397,32 @@ def show_status(cli):
                        (worker.wid, worker.core) for worker in workers]
         cli.fout.write('%s\n' % ', '.join(worker_list))
     else:
-        cli.fout.write('(none)\n')
+        cli.fout.write(NONE_MESSAGE)
 
     cli.fout.write('  Available drivers: ')
     if drivers:
         cli.fout.write('%s\n' % ', '.join(drivers))
     else:
-        cli.fout.write('(none)\n')
+        cli.fout.write(NONE_MESSAGE)
 
     cli.fout.write('  Available plugins: ')
     if drivers:
         cli.fout.write('%s\n' % ', '.join(plugins))
     else:
-        cli.fout.write('(none)\n')
+        cli.fout.write(NONE_MESSAGE)
 
     cli.fout.write('  Available module classes: ')
     if mclasses:
         cli.fout.write('%s\n' % ', '.join(mclasses))
     else:
-        cli.fout.write('(none)\n')
+        cli.fout.write(NONE_MESSAGE)
 
     cli.fout.write('  Active ports: ')
     if ports:
         port_list = ['%s/%s' % (p.name, p.driver) for p in ports]
         cli.fout.write('%s\n' % ', '.join(port_list))
     else:
-        cli.fout.write('(none)\n')
+        cli.fout.write(NONE_MESSAGE)
 
     cli.fout.write('  Active modules: ')
     if modules:
@@ -1365,7 +1432,7 @@ def show_status(cli):
 
         cli.fout.write('%s\n' % ', '.join(module_list))
     else:
-        cli.fout.write('(none)\n')
+        cli.fout.write(NONE_MESSAGE)
 
 
 # last_stats: a map of (node name, gateid) -> (timestamp, counter value)
@@ -1604,17 +1671,17 @@ def show_module_list(cli, module_names):
 
 def _show_mclass(cli, cls_name, detail):
     info = cli.bess.get_mclass_info(cls_name)
-    cli.fout.write('%-16s %s\n' % (info.name, info.help))
+    cli.fout.write(FORMAT_16S_S % (info.name, info.help))
 
     if detail:
         if len(info.cmds) > 0:
-            cli.fout.write('\t\t commands: %s\n' %
+            cli.fout.write(COMMANDS_FORMAT %
                            (', '.join(map(lambda cmd, msg: "%s(%s)"
                                           % (cmd, msg),
                                           info.cmds,
                                           info.cmd_args))))
         else:
-            cli.fout.write('\t\t (no commands)\n')
+            cli.fout.write(NO_COMMANDS_FORMAT)
 
 
 @cmd('show mclass', 'Show all module classes')
@@ -1651,17 +1718,17 @@ def show_gatehook_all(cli):
 
 def _show_gatehook_class(cli, cls_name, detail):
     info = cli.bess.get_gatehook_class_info(cls_name)
-    cli.fout.write('%-16s %s\n' % (info.name, info.help))
+    cli.fout.write(FORMAT_16S_S % (info.name, info.help))
 
     if detail:
         if len(info.cmds) > 0:
-            cli.fout.write('\t\t commands: %s\n' %
+            cli.fout.write(NO_COMMANDS_FORMAT %
                            (', '.join(map(lambda cmd, msg: "%s(%s)"
                                           % (cmd, msg),
                                           info.cmds,
                                           info.cmd_args))))
         else:
-            cli.fout.write('\t\t (no commands)\n')
+            cli.fout.write(NO_COMMANDS_FORMAT)
 
 
 @cmd('show gatehookclass', 'Show all gatehook classes')
@@ -1707,13 +1774,13 @@ def show_plugin_all(cli):
 
 def _show_driver(cli, drv_name, detail):
     info = cli.bess.get_driver_info(drv_name)
-    cli.fout.write('%-16s %s\n' % (info.name, info.help))
+    cli.fout.write(FORMAT_16S_S % (info.name, info.help))
 
     if detail:
         if info.commands:
-            cli.fout.write('\t\t commands: %s\n' % (', '.join(info.commands)))
+            cli.fout.write(COMMANDS_FORMAT % (', '.join(info.commands)))
         else:
-            cli.fout.write('\t\t (no commands)\n')
+            cli.fout.write(NO_COMMANDS_FORMAT)
 
 
 @cmd('show driver', 'Show all port drivers')
