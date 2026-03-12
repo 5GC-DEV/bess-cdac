@@ -153,36 +153,49 @@ def dict_to_protobuf(pb_klass_or_instance, values, type_callable_map=REVERSE_TYP
     return _dict_to_protobuf(instance, values, type_callable_map, strict)
 
 
-def _get_field_mapping(pb, dict_value, strict):
-    field_mapping = []
-    for key, value in dict_value.items():
-        if key == EXTENSION_CONTAINER:
-            continue
-        if key not in pb.DESCRIPTOR.fields_by_name:
-            if strict:
-                raise KeyError("%s does not have a field called %s" %
-                               (pb.__class__.__name__, key))
-            continue
-        field_mapping.append((pb.DESCRIPTOR.fields_by_name[
+def _process_regular_fields(pb, dict_value, strict, field_mapping):  
+    """Process regular (non-extension) fields from the dictionary."""  
+    for key, value in dict_value.items():  
+        if key == EXTENSION_CONTAINER:  
+            continue  
+        if key not in pb.DESCRIPTOR.fields_by_name:  
+            if strict:  
+                raise KeyError("%s does not have a field called %s" %  
+                               (pb.__class__.__name__, key))  
+            continue  
+        field_mapping.append((pb.DESCRIPTOR.fields_by_name[  
                              key], value, getattr(pb, key, None)))
-
-    for ext_num, ext_val in dict_value.get(EXTENSION_CONTAINER, {}).items():
-        try:
-            ext_num = int(ext_num)
-        except ValueError:
-            raise ValueError("Extension keys must be integers.")
-        if ext_num not in pb._extensions_by_number:
-            if strict:
-                raise KeyError("%s does not have a extension with number %s. "
-                               "Perhaps you forgot to import it?" %
-                               (pb.__class__.__name__, key))
-            continue
-        ext_field = pb._extensions_by_number[ext_num]
-        pb_val = pb.Extensions[ext_field]
+        
+def _process_extension_fields(pb, dict_value, strict, field_mapping):  
+    """Process extension fields from the dictionary."""  
+    for ext_num, ext_val in dict_value.get(EXTENSION_CONTAINER, {}).items():  
+        try:  
+            ext_num = int(ext_num)  
+        except ValueError:  
+            raise ValueError("Extension keys must be integers.")  
+          
+        if ext_num not in pb._extensions_by_number:  
+            if strict:  
+                raise KeyError("%s does not have a extension with number %s. "  
+                               "Perhaps you forgot to import it?" %  
+                               (pb.__class__.__name__, ext_num))  
+            continue  
+          
+        ext_field = pb._extensions_by_number[ext_num]  
+        pb_val = pb.Extensions[ext_field]  
         field_mapping.append((ext_field, ext_val, pb_val))
 
+def _get_field_mapping(pb, dict_value, strict):  
+    """Get field mapping for dictionary to protobuf conversion."""  
+    field_mapping = []  
+      
+    # Process regular fields  
+    _process_regular_fields(pb, dict_value, strict, field_mapping)  
+      
+    # Process extension fields  
+    _process_extension_fields(pb, dict_value, strict, field_mapping)  
+      
     return field_mapping
-
 
 def _dict_to_protobuf(pb, value, type_callable_map, strict):
     fields = _get_field_mapping(pb, value, strict)
