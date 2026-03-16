@@ -197,52 +197,92 @@ def _get_field_mapping(pb, dict_value, strict):
       
     return field_mapping
 
-def _dict_to_protobuf(pb, value, type_callable_map, strict):
-    fields = _get_field_mapping(pb, value, strict)
+def _dict_to_protobuf(pb, value, type_callable_map, strict):  
+    """Populates a protobuf message from a dictionary."""  
+    fields = _get_field_mapping(pb, value, strict)  
+    basestr = _get_base_string_type()  
+      
+    for field, input_value, pb_value in fields:  
+        # Each handler returns True if it processed the field, triggering a 'continue'
+        if _handle_repeated_field(field, input_value, pb_value, type_callable_map, strict, basestr):  
+            continue  
+        if _handle_message_field(field, input_value, pb_value, type_callable_map, strict):  
+            continue  
+        if _handle_extension_field(field, input_value, pb):  
+            continue  
+              
+        input_value = _convert_field_value(field, input_value, type_callable_map, basestr)  
+        setattr(pb, field.name, input_value)  
+      
+    return pb  
 
-    if sys.version_info[0] == 2:
-        basestr = basestring
-    else:
-        basestr = str
+def _get_base_string_type():  
+    """Get the appropriate string type for the Python version."""  
+    return basestring if sys.version_info[0] == 2 else str  
 
-    for field, input_value, pb_value in fields:
-        if field.label == FieldDescriptor.LABEL_REPEATED:
-            if field.message_type and field.message_type.has_options and \
-                   field.message_type.GetOptions().map_entry:
-                # Special processing for nested dict
-                if isinstance(input_value, dict) and all([isinstance(x, dict) for x in input_value.values()]):
-                    for k, v in input_value.items():
-                        _dict_to_protobuf(
-                            pb_value[k], input_value[k], type_callable_map, strict)
-                else:
-                    pb_value.update(input_value)
-                continue
-            for item in input_value:
-                if field.type == FieldDescriptor.TYPE_MESSAGE:
-                    m = pb_value.add()
-                    _dict_to_protobuf(m, item, type_callable_map, strict)
-                elif field.type == FieldDescriptor.TYPE_ENUM and isinstance(item, basestr):
-                    pb_value.append(_string_to_enum(field, item))
-                else:
-                    pb_value.append(item)
-            continue
-        if field.type == FieldDescriptor.TYPE_MESSAGE:
-            _dict_to_protobuf(pb_value, input_value, type_callable_map, strict)
-            continue
+def _handle_repeated_field(field, input_value, pb_value, type_callable_map, strict, basestr):  
+    """Handle repeated fields including map entries."""  
+    if field.label != FieldDescriptor.LABEL_REPEATED:  
+        return False  
+      
+    if _is_map_field(field):  
+        _handle_map_field(field, input_value, pb_value, type_callable_map, strict)  
+    else:  
+        # Added 'strict' to this call
+        _handle_regular_repeated_field(field, input_value, pb_value, type_callable_map, strict, basestr)  
+      
+    return True  
 
-        if field.type in type_callable_map:
-            input_value = type_callable_map[field.type](input_value)
+def _is_map_field(field):  
+    """Check if field is a map entry."""  
+    return (field.message_type and   
+            field.message_type.has_options and   
+            field.message_type.GetOptions().map_entry)  
 
-        if field.is_extension:
-            pb.Extensions[field] = input_value
-            continue
+def _handle_map_field(field, input_value, pb_value, type_callable_map, strict):  
+    """Handle map field processing."""  
+    if isinstance(input_value, dict) and all(isinstance(x, dict) for x in input_value.values()):  
+        for k, v in input_value.items():  
+            _dict_to_protobuf(pb_value[k], v, type_callable_map, strict)  
+    else:  
+        pb_value.update(input_value)  
 
-        if field.type == FieldDescriptor.TYPE_ENUM and isinstance(input_value, basestr):
-            input_value = _string_to_enum(field, input_value)
+def _handle_regular_repeated_field(field, input_value, pb_value, type_callable_map, strict, basestr):  
+    """Handle regular repeated field processing."""  
+    for item in input_value:  
+        if field.type == FieldDescriptor.TYPE_MESSAGE:  
+            m = pb_value.add()  
+            _dict_to_protobuf(m, item, type_callable_map, strict)  
+        elif field.type == FieldDescriptor.TYPE_ENUM and isinstance(item, basestr):  
+            pb_value.append(_string_to_enum(field, item))  
+        else:  
+            pb_value.append(item)  
 
-        setattr(pb, field.name, input_value)
+def _handle_message_field(field, input_value, pb_value, type_callable_map, strict):  
+    """Handle message field processing."""  
+    if field.type != FieldDescriptor.TYPE_MESSAGE:  
+        return False  
+      
+    _dict_to_protobuf(pb_value, input_value, type_callable_map, strict)  
+    return True  
 
-    return pb
+def _handle_extension_field(field, input_value, pb):  
+    """Handle extension field processing."""  
+    if not field.is_extension:  
+        return False  
+      
+    pb.Extensions[field] = input_value  
+    return True  
+
+def _convert_field_value(field, input_value, type_callable_map, basestr):  
+    """Convert field value to appropriate type."""  
+    if field.type in type_callable_map:  
+        input_value = type_callable_map[field.type](input_value)  
+      
+    if field.type == FieldDescriptor.TYPE_ENUM and isinstance(input_value, basestr):  
+        input_value = _string_to_enum(field, input_value)  
+      
+    return input_value
 
 
 def _string_to_enum(field, input_value):
