@@ -1435,73 +1435,66 @@ def show_status(cli):
         cli.fout.write(NONE_MESSAGE)
 
 
-# last_stats: a map of (node name, gateid) -> (timestamp, counter value)
-def _draw_pipeline(cli, field, units, last_stats=None, graph_args=[]):
-    if graph_args is None:
-        graph_args = []
-
-    modules = sorted(cli.bess.list_modules().modules, key=lambda x: x.name)
-    names = []
+def _get_node_labels(modules):
+    """Pre-calculate display labels for all modules."""
     node_labels = {}
-
     for m in modules:
-        name = m.name
-        mclass = m.mclass
-        names.append(name)
-        node_labels[name] = '%s\\n%s' % (name, mclass)
-        node_labels[name] += '\\n%s' % m.desc
+        label = f"{m.name}\\n{m.mclass}\\n{m.desc}"
+        node_labels[m.name] = label
+    return node_labels
+
+def _get_gate_label(gate, field, name, last_stats):
+    """Determine the value/label to show on a graph edge."""
+    if gate.timestamp == 0.0:
+        return '?'
+
+    # Case A: Static Pipeline View
+    if last_stats is None:
+        val = getattr(gate, field)
+    # Case B: Monitoring View (calculate rate)
+    else:
+        last_time, last_val = last_stats[(name, gate.ogate)]
+        new_time, new_val = gate.timestamp, getattr(gate, field)
+        last_stats[(name, gate.ogate)] = (new_time, new_val)
+        val = (new_val - last_val) / (new_time - last_time)
+
+    return '%.1f' % (val * 8 / 1e6) if field == 'bytes' else '%d' % val
+
+def _draw_pipeline(cli, field, units, last_stats=None, graph_args=None):
+    """Draw pipeline visualization with reduced complexity."""
+    graph_args = graph_args or []
+    modules = sorted(cli.bess.list_modules().modules, key=lambda x: x.name)
+    node_labels = _get_node_labels(modules)
 
     try:
-        f = subprocess.Popen('graph-easy ' + ' '.join(graph_args), shell=True,
-                             stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE,
-                             universal_newlines=True)
+        proc = subprocess.Popen(['graph-easy'] + graph_args, 
+                                stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                universal_newlines=True)
 
+        # 1. Define Nodes
         for m in modules:
-            print('[%s]' % node_labels[m.name], file=f.stdin)
+            proc.stdin.write(f'[{node_labels[m.name]}]\n')
 
-        for name in names:
-            gates = cli.bess.get_module_info(name).ogates
-
+        # 2. Define Edges (Connections)
+        for m in modules:
+            gates = cli.bess.get_module_info(m.name).ogates
             for gate in gates:
-                if gate.timestamp == 0.0:  # stats disabled?
-                    label = '?'
-                else:
-                    if last_stats is None:  # show pipeline
-                        val = getattr(gate, field)
-                    else:  # monitor pipeline
-                        last_time, last_val = last_stats[(name, gate.ogate)]
-                        new_time, new_val = gate.timestamp, getattr(
-                            gate, field)
-                        last_stats[(name, gate.ogate)] = (new_time, new_val)
+                label = _get_gate_label(gate, field, m.name, last_stats)
+                edge_attr = f'{{label::{gate.ogate}  {label} {units} {gate.igate}:;}}'
+                
+                line = f'[{node_labels[m.name]}] ->{edge_attr} [{node_labels[gate.name]}]\n'
+                proc.stdin.write(line)
 
-                        val = (new_val - last_val) / (new_time - last_time)
-
-                    if field == 'bytes':
-                        label = '%.1f' % (val * 8 / 1e6)
-                    else:
-                        label = '%d' % val
-
-                edge_attr = '{label::%d  %s %s %d:;}' % (
-                    gate.ogate, label, units, gate.igate)
-
-                print('[%s] ->%s [%s]' % (
-                    node_labels[name],
-                    edge_attr,
-                    node_labels[gate.name]), file=f.stdin)
-        output, error = f.communicate()
-        f.wait()
+        output, _ = proc.communicate()
         return output
 
     except IOError as e:
         if e.errno == errno.EPIPE:
-            raise cli.CommandError('"graph-easy" program is not available? '
-                                   'Check if the package "libgraph-easy-perl" '
-                                   'is installed.')
-        else:
-            raise
-
+            raise cli.CommandError('"graph-easy" program not available. '
+                                   'Install "libgraph-easy-perl".')
+        raise
 
 @cmd('show pipeline [GRAPHEASY_OPTS...]', 'Show the current datapath pipeline')
 def show_pipeline(cli, opts):
@@ -1589,62 +1582,66 @@ def show_port_list(cli, port_names):
             raise cli.CommandError('Port "%s" doest not exist' % port_name)
 
 
+def _get_gate_stats_str(gate, gate_type="gate"):
+    """Format gate statistics with error handling."""
+    try:
+        return 'batches %-11d packets %-12d' % (gate.cnt, gate.pkts)
+    except AttributeError:
+        return 'batches N/A packets N/A'
+    except Exception as e:
+        print(f"Error formatting {gate_type} stats: {e}")
+        return 'batches N/A packets N/A'
+
+def _print_metadata(cli, metadata):
+    """Format and print per-packet metadata fields."""
+    if not metadata:
+        return
+        
+    cli.fout.write('    Per-packet metadata fields:\n')
+    for field in metadata:
+        cli.fout.write('%16s %-6s%2d bytes ' %
+                       (field.name + ':', field.mode, field.size))
+        
+        if field.offset >= 0:
+            cli.fout.write('at offset %d\n' % field.offset)
+        elif field.offset == -1:
+            cli.fout.write('(no downstream reader)\n')
+        elif field.offset == -2:
+            cli.fout.write('(no upstream writer)\n')
+        else:
+            cli.fout.write('\n')
+
 def _show_module(cli, module_name):
+    """Display detailed information about a specific module."""
     info = cli.bess.get_module_info(module_name)
 
     cli.fout.write('  %s::%s(%s)\n' % (info.name, info.mclass, info.desc))
 
-    if len(info.metadata) > 0:
-        cli.fout.write('    Per-packet metadata fields:\n')
-        for field in info.metadata:
-            cli.fout.write('%16s %-6s%2d bytes ' %
-                           (field.name + ':', field.mode, field.size))
+    # 1. Print Metadata (extracted to reduce branching complexity)
+    _print_metadata(cli, info.metadata)
 
-            if field.offset >= 0:
-                cli.fout.write('at offset %d\n' % field.offset)
-            elif field.offset == -1:
-                cli.fout.write('(no downstream reader)\n')
-            elif field.offset == -2:
-                cli.fout.write('(no upstream writer)\n')
-            else:
-                cli.fout.write('\n')
-
-    if len(info.igates) > 0:
+    # 2. Print Input Gates
+    if info.igates:
         cli.fout.write('    Input gates:\n')
         for gate in info.igates:
-            track_str = 'batches N/A packets N/A'
-            try:
-                track_str = 'batches %-11d packets %-12d' % (gate.cnt,
-                                                             gate.pkts)
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error formatting gate stats: {e}")
+            track_str = _get_gate_stats_str(gate, "input gate")
             cli.fout.write('      %3d: %s %s\t%s\n' %
                            (gate.igate, track_str,
-                            ', '.join('%s:%d ->' % (g.name, g.ogate)
-                                      for g in gate.ogates),
-                            ', '.join('%s::%s' % (h.class_name, h.hook_name)
-                                      for h in gate.gatehooks)))
+                            ', '.join('%s:%d ->' % (g.name, g.ogate) for g in gate.ogates),
+                            ', '.join('%s::%s' % (h.class_name, h.hook_name) for h in gate.gatehooks)))
 
-    if len(info.ogates) > 0:
+    # 3. Print Output Gates
+    if info.ogates:
         cli.fout.write('    Output gates:\n')
         for gate in info.ogates:
-            track_str = 'batches N/A packets N/A'
-            try:
-                track_str = 'batches %-11d packets %-12d' % (gate.cnt,
-                                                             gate.pkts)
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error formatting output gate stats: {e}")
-            cli.fout.write(
-                '      %3d: %s -> %d:%s\t%s\n' %
-                (gate.ogate, track_str, gate.igate, gate.name,
-                 ', '.join("%s::%s" % (h.class_name, h.hook_name)
-                           for h in gate.gatehooks)))
+            track_str = _get_gate_stats_str(gate, "output gate")
+            cli.fout.write('      %3d: %s -> %d:%s\t%s\n' %
+                           (gate.ogate, track_str, gate.igate, gate.name,
+                            ', '.join("%s::%s" % (h.class_name, h.hook_name) for h in gate.gatehooks)))
+
     cli.fout.write('    Deadends: %-12d\n' % (info.deadends,))
 
+    # 4. Print Dump
     if hasattr(info, 'dump'):
         dump_str = pprint.pformat(info.dump, width=74)
         dump_str = '\n      '.join(dump_str.split('\n'))
@@ -1847,88 +1844,81 @@ PortRate = collections.namedtuple('PortRate',
                                    'out_packets', 'out_dropped', 'out_bytes'])
 
 
-def _monitor_ports(cli, *ports):
+def _calculate_port_delta(old, new):
+    """Calculate rate-based statistics for port."""
+    sec_diff = new.timestamp - old.timestamp
+    return PortRate(
+        inc_packets=(new.inc.packets - old.inc.packets) / sec_diff,
+        inc_dropped=(new.inc.dropped - old.inc.dropped) / sec_diff,
+        inc_bytes=(new.inc.bytes - old.inc.bytes) / sec_diff,
+        out_packets=(new.out.packets - old.out.packets) / sec_diff,
+        out_dropped=(new.out.dropped - old.out.dropped) / sec_diff,
+        out_bytes=(new.out.bytes - old.out.bytes) / sec_diff
+    )
 
-    def get_delta(old, new):
-        sec_diff = new.timestamp - old.timestamp
-        delta = PortRate(
-            inc_packets=(new.inc.packets - old.inc.packets) / sec_diff,
-            inc_dropped=(new.inc.dropped - old.inc.dropped) / sec_diff,
-            inc_bytes=(new.inc.bytes - old.inc.bytes) / sec_diff,
-            out_packets=(new.out.packets - old.out.packets) / sec_diff,
-            out_dropped=(new.out.dropped - old.out.dropped) / sec_diff,
-            out_bytes=(new.out.bytes - old.out.bytes) / sec_diff)
-        return delta
+def _aggregate_port_stats(stats_array):
+    """Aggregate statistics from multiple ports."""
+    total = copy.deepcopy(stats_array[0])
+    for stat in stats_array[1:]:
+        total.inc.packets += stat.inc.packets
+        total.inc.dropped += stat.inc.dropped
+        total.inc.bytes += stat.inc.bytes
+        total.out.packets += stat.out.packets
+        total.out.dropped += stat.out.dropped
+        total.out.bytes += stat.out.bytes
+    return total
 
-    def print_header(timestamp):
+def _format_and_write_port_data(cli, name, delta, csv_f=None):
+    """Format and write a single line of port data."""
+    # If inc/out_bytes == 0 and inc_packets != 0, driver doesn't account packet bytes.
+    inc_mbps = ((delta.inc_bytes + delta.inc_packets * 24) * 8 / 1e6) if delta.inc_bytes else 0.0
+    out_mbps = ((delta.out_bytes + delta.out_packets * 24) * 8 / 1e6) if delta.out_bytes else 0.0
+
+    data = (inc_mbps, delta.inc_packets / 1e6, int(delta.inc_dropped),
+            out_mbps, delta.out_packets / 1e6, int(delta.out_dropped))
+            
+    cli.fout.write('{:<20}{:>14.1f}{:>10.3f}{:>10d}        {:>14.1f}{:>10.3f}{:>10d}\n'.format(name, *data))
+    if csv_f is not None:
+        csv_line = '{},{},{}\n'.format(time.strftime('%X'), name, ','.join('{:.3f}'.format(x) for x in data))
+        csv_f.write(csv_line)
+
+def _monitor_ports_loop(cli, ports, drivers, csv_f=None):
+    """Main monitoring loop for ports."""
+    last = {port: cli.bess.get_port_stats(port) for port in ports}
+    
+    while True:
+        time.sleep(1)
+        now = {port: cli.bess.get_port_stats(port) for port in ports}
+        
+        # 1. Write Header
+        timestamp = now[ports[-1]].timestamp
         cli.fout.write('\n')
         cli.fout.write('{:<20}{:>14}{:>10}{:>10}        {:>14}{:>10}{:>10}\n'.format(
                        time.strftime('%X') + str(timestamp % 1)[1:8],
                        'INC     Mbps', 'Mpps', 'dropped', 'OUT     Mbps', 'Mpps', 'Dropped'))
-
         cli.fout.write('{}\n'.format('-' * 96))
-
-    def print_footer():
+        
+        # 2. Write Deltas
+        for port in ports:
+            delta = _calculate_port_delta(last[port], now[port])
+            _format_and_write_port_data(cli, '{}{}'.format(port, drivers[port]), delta, csv_f)
+            
         cli.fout.write('{}\n'.format('-' * 96))
+        
+        # 3. Write Totals (if applicable)
+        if len(ports) > 1:
+            total_last = _aggregate_port_stats(list(last.values()))
+            total_now = _aggregate_port_stats(list(now.values()))
+            total_delta = _calculate_port_delta(total_last, total_now)
+            _format_and_write_port_data(cli, 'Total', total_delta, csv_f)
+            
+        # 4. Update stats for next loop
+        last = now
 
-    def print_delta(timestamp, port, delta, csv_f=None):
-        # If inc/out_bytes == 0 and inc_packets != 0, it means the
-        # driver does not account packet bytes.
-        # Use 0 rather than inaccurate numbers from Ethernet overheads.
-        if delta.inc_bytes:
-            inc_mbps = (delta.inc_bytes + delta.inc_packets * 24) * 8 / 1e6
-        else:
-            inc_mbps = 0.
-
-        if delta.out_bytes:
-            out_mbps = (delta.out_bytes + delta.out_packets * 24) * 8 / 1e6
-        else:
-            out_mbps = 0.
-
-        data = (inc_mbps, delta.inc_packets / 1e6, int(delta.inc_dropped), out_mbps, delta.out_packets / 1e6,
-                int(delta.out_dropped))
-        cli.fout.write('{:<20}{:>14.1f}{:>10.3f}{:>10d}        {:>14.1f}{:>10.3f}{:>10d}\n'.format(port, *data))
-        if csv_f is not None:
-            csv_f.write('{},{},{}\n'.format(time.strftime('%X'), port, ','.join(map(lambda x: '{:.3f}'.format(x), data))))
-
-    def get_total(arr):
-        total = copy.deepcopy(arr[0])
-        for stat in arr[1:]:
-            total.inc.packets += stat.inc.packets
-            total.inc.dropped += stat.inc.dropped
-            total.inc.bytes += stat.inc.bytes
-            total.out.packets += stat.out.packets
-            total.out.dropped += stat.out.dropped
-            total.out.bytes += stat.out.bytes
-        return total
-
-    def print_loop(csv_f=None):
-        while True:
-            time.sleep(1)
-
-            for port in ports:
-                now[port] = cli.bess.get_port_stats(port)
-
-            print_header(now[port].timestamp)
-
-            for port in ports:
-                print_delta(now[port].timestamp, '{}{}'.format(port, drivers[port]),
-                            get_delta(last[port], now[port]), csv_f)
-
-            print_footer()
-
-            if len(ports) > 1:
-                print_delta(now[port].timestamp, 'Total', get_delta(
-                    get_total(list(last.values())),
-                    get_total(list(now.values()))), csv_f)
-
-            for port in ports:
-                last[port] = now[port]
-
+def _monitor_ports(cli, *ports):
+    """Monitor port statistics."""
     all_ports = sorted(cli.bess.list_ports().ports, key=lambda x: x.name)
-    drivers = {}
-    for port in all_ports:
-        drivers[port.name] = port.driver
+    drivers = {port.name: port.driver for port in all_ports}
 
     if not ports:
         ports = [port.name for port in all_ports]
@@ -1937,22 +1927,15 @@ def _monitor_ports(cli, *ports):
 
     cli.fout.write('Monitoring ports: {}\n'.format(', '.join(ports)))
 
-    last = {}
-    now = {}
-
-    for port in ports:
-        last[port] = cli.bess.get_port_stats(port)
-
     try:
         csv_path = os.getenv('CSV', None)
         with open(csv_path, 'w') if csv_path is not None else noop() as csv_f:
             if csv_f is not None:
                 csv_f.write('{}\n'.format(','.join(
                     ('Timestamp', 'Port', 'Mbps In', 'Mpps In', 'Dropped In', 'Mbps Out', 'Mpps Out', 'Dropped Out'))))
-            print_loop(csv_f)
+            _monitor_ports_loop(cli, ports, drivers, csv_f)
     except KeyboardInterrupt:
         pass
-
 
 @cmd('monitor port', 'Monitor the current traffic of all ports')
 def monitor_port_all(cli):
@@ -1968,92 +1951,89 @@ TcCounterRate = collections.namedtuple('TcCounterRate',
                                        ['count', 'cycles', 'bits', 'packets'])
 
 
-def _monitor_tcs(cli, *tcs):
-    GUTTER_WIDTH = 5
-    FIELDS = ('CPU MHz', 'scheduled', 'Mpps', 'Mbps', 'pkts/sched', 'cycles/p')
+def _calculate_tc_delta(old, new):  
+    """Calculate rate-based statistics for traffic class."""  
+    sec_diff = new.timestamp - old.timestamp  
+    return TcCounterRate(  
+        count=(new.count - old.count) / sec_diff,  
+        cycles=(new.cycles - old.cycles) / sec_diff,  
+        bits=(new.bits - old.bits) / sec_diff,  
+        packets=(new.packets - old.packets) / sec_diff  
+    )  
 
-    def get_delta(old, new):
-        sec_diff = new.timestamp - old.timestamp
-        delta = TcCounterRate(count=(new.count - old.count) / sec_diff,
-                              cycles=(new.cycles - old.cycles) / sec_diff,
-                              bits=(new.bits - old.bits) / sec_diff,
-                              packets=(new.packets - old.packets) / sec_diff)
-        return delta
-
-    def print_header(timestamp, name_len):
-        cli.fout.write('\n')
-        fmt = '{:<%d}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}\n' % (name_len,)
-        cli.fout.write(fmt.format(time.strftime('%X') + str(timestamp % 1)[1:8], *FIELDS))
-
-        cli.fout.write('{}\n'.format(('-' * (72 + name_len))))
-
-    def print_footer(name_len):
-        cli.fout.write('{}\n'.format('-' * (72 + name_len)))
-
-    def print_delta(timestamp, tc, delta, name_len, csv_f=None):
-        if delta.count >= 1:
-            ppb = delta.packets / delta.count
-        else:
-            ppb = 0.
-
-        if delta.packets >= 1:
-            cpp = delta.cycles / delta.packets
-        else:
-            cpp = 0.
-
-        data = (delta.cycles / 1e6, int(delta.count), delta.packets / 1e6, delta.bits / 1e6, ppb, cpp)
-        fmt = '{:<%d}{:>12.3f}{:>12d}{:>12.3f}{:>12.3f}{:>12.3f}{:>12.3f}\n' % (name_len,)
-        cli.fout.write(fmt.format(tc, *data))
-        if csv_f is not None:
-            csv_f.write('{},{},{}\n'.format(time.strftime('%X'), tc, ','.join(map(lambda x: '{:.3f}'.format(x), data))))
-
-    def print_loop(csv=None):
-        while True:
-            time.sleep(1)
-
-            for tc in tcs:
-                now[tc] = cli.bess.get_tc_stats(tc)
-
-            print_header(now[tc].timestamp, max_len)
-
-            for tc in tcs:
-                print_delta(now[tc].timestamp, 'W{} {}'.format(wids[tc], tc),
-                            get_delta(last[tc], now[tc]), max_len, csv)
-
-            print_footer(max_len)
-
-            for tc in tcs:
-                last[tc] = now[tc]
-
-    all_tcs = cli.bess.list_tcs().classes_status
-    wids = {}
-    max_len = 0
-    for tc in all_tcs:
-        class_ = getattr(tc, 'class')
-        max_len = max(len(class_.name), max_len)
-        wids[class_.name] = class_.wid
-    max_len += GUTTER_WIDTH
-
-    if not tcs:
-        tcs = [getattr(tc, 'class').name for tc in all_tcs]
-        if not tcs:
-            raise cli.CommandError('No traffic class to monitor')
-
-    cli.fout.write('Monitoring traffic classes: {}\n'.format(', '.join(tcs)))
-
-    last = {}
-    now = {}
-
-    for tc in tcs:
-        last[tc] = cli.bess.get_tc_stats(tc)
-
-    try:
-        csv_path = os.getenv('CSV', None)
-        with open(csv_path, 'w') if csv_path is not None else noop() as csv_f:
-            if csv_f is not None:
-                csv_f.write('{}\n'.format(','.join(('Timestamp','traffic class',) + FIELDS)))
-            print_loop(csv_f)
-    except KeyboardInterrupt:
+def _format_tc_data(delta):  
+    """Calculate ratios and format traffic class data for display."""  
+    ppb = delta.packets / delta.count if delta.count >= 1 else 0.0  
+    cpp = delta.cycles / delta.packets if delta.packets >= 1 else 0.0  
+    return (delta.cycles / 1e6, int(delta.count), delta.packets / 1e6, delta.bits / 1e6, ppb, cpp)  
+  
+def _monitor_tc_loop(cli, tcs, wids, max_len, fields, csv_f=None):  
+    """Main monitoring loop for traffic classes."""  
+    last_stats = {tc: cli.bess.get_tc_stats(tc) for tc in tcs}  
+      
+    while True:  
+        time.sleep(1)  
+        current_stats = {tc: cli.bess.get_tc_stats(tc) for tc in tcs}  
+          
+        # 1. Write Header
+        timestamp = current_stats[tcs[-1]].timestamp  
+        cli.fout.write('\n')  
+        fmt_head = '{:<%d}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}\n' % (max_len,)  
+        cli.fout.write(fmt_head.format(time.strftime('%X') + str(timestamp % 1)[1:8], *fields))  
+        cli.fout.write('{}\n'.format('-' * (72 + max_len)))  
+          
+        # 2. Write Data for each TC
+        for tc in tcs:  
+            delta = _calculate_tc_delta(last_stats[tc], current_stats[tc])  
+            data = _format_tc_data(delta)  
+            tc_display_name = 'W{} {}'.format(wids[tc], tc)  
+            
+            fmt_data = '{:<%d}{:>12.3f}{:>12d}{:>12.3f}{:>12.3f}{:>12.3f}{:>12.3f}\n' % (max_len,)  
+            cli.fout.write(fmt_data.format(tc_display_name, *data))  
+              
+            if csv_f is not None:  
+                csv_line = '{},{},{}\n'.format(  
+                    time.strftime('%X'),   
+                    tc_display_name,   
+                    ','.join('{:.3f}'.format(x) for x in data)  
+                )  
+                csv_f.write(csv_line)  
+          
+        # 3. Write Footer and update stats  
+        cli.fout.write('{}\n'.format('-' * (72 + max_len)))  
+        last_stats = current_stats  
+  
+def _monitor_tcs(cli, *tcs):  
+    """Monitor traffic class statistics."""  
+    GUTTER_WIDTH = 5  
+    FIELDS = ('CPU MHz', 'scheduled', 'Mpps', 'Mbps', 'pkts/sched', 'cycles/p')  
+      
+    # Get TC information
+    all_tcs = cli.bess.list_tcs().classes_status  
+    wids = {}  
+    max_len = 0  
+      
+    for tc in all_tcs:  
+        class_ = getattr(tc, 'class')  
+        max_len = max(len(class_.name), max_len)  
+        wids[class_.name] = class_.wid  
+    max_len += GUTTER_WIDTH  
+      
+    # Determine which TCs to monitor  
+    if not tcs:  
+        tcs =[getattr(tc, 'class').name for tc in all_tcs]  
+        if not tcs:  
+            raise cli.CommandError('No traffic class to monitor')  
+      
+    cli.fout.write('Monitoring traffic classes: {}\n'.format(', '.join(tcs)))  
+      
+    try:  
+        csv_path = os.getenv('CSV', None)  
+        with open(csv_path, 'w') if csv_path is not None else noop() as csv_f:  
+            if csv_f is not None:  
+                csv_f.write('{}\n'.format(','.join(('Timestamp', 'traffic class') + FIELDS)))  
+            _monitor_tc_loop(cli, tcs, wids, max_len, FIELDS, csv_f)  
+    except KeyboardInterrupt:  
         pass
 
 
