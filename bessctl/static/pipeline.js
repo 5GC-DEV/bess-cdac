@@ -176,15 +176,15 @@ function get_graph_options() {
 function generate_nodes(modules, options) {  
     let nodes = '';  
     for (const module_name in modules) {  
-        const module = modules[module_name];  
+        const module_data = modules[module_name];  
         
         // Pass options if add_datapoints needs them
-        add_datapoints(stats, module_name, module.ogates, 'ogate');  
+        add_datapoints(stats, module_name, module_data.ogates, 'ogate');  
           
-        set_gate_visibility(module);  
+        set_gate_visibility(module_data);  
           
         // Pass options if gates_to_str needs them
-        const node_content = create_module_node(module, module_name, options);  
+        const node_content = create_module_node(module_data, module_name, options);  
         nodes += node_content;  
     }  
     return nodes;  

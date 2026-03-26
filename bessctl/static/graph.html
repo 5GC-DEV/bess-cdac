@@ -140,17 +140,13 @@ SPDX-License-Identifier: BSD-3-Clause
     <script>
       var timer = setTimeout(refresh, 1000);
 
-      function update_toast(selector, show_if) {
-        var elem = $(selector)
-        if (show_if) {
-          if (!elem.hasClass('show')) {
-            elem.prependTo('#toasts').toast('show');
-          }
-        } else {
-          if (elem.hasClass('show')) {
-            elem.toast('hide');
-          }
-        }
+      function update_toast(selector, show_if) {  
+        var elem = $(selector)  
+        if (show_if && !elem.hasClass('show')) {  
+          elem.prependTo('#toasts').toast('show');  
+        } else if (!show_if && elem.hasClass('show')) {  
+          elem.toast('hide');  
+        }  
       }
 
       function refresh() {

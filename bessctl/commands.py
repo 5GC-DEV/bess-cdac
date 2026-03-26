@@ -1570,14 +1570,29 @@ def import_plugin(cli, plugin):
         cli.bess.resume_all()
 
 
-@cmd('unload plugin PLUGIN_FILE', 'Unload the specified plugin (*.so)')
-def unload_plugin(cli, plugin):
-    # FIXME check whether the plugin is being used
-    # currently this command can crash the BESS daemon
-    cli.bess.pause_all()
-    try:
-        cli.bess.unload_plugin(plugin)
-    finally:
+@cmd('unload plugin PLUGIN_FILE', 'Unload the specified plugin (*.so)')  
+def unload_plugin(cli, plugin):  
+    # Check if plugin is being used by any modules  
+    modules = cli.bess.list_modules().modules  
+    plugin_name = os.path.splitext(os.path.basename(plugin))[0]  
+      
+    # Look for modules that might be from this plugin  
+    active_modules = []  
+    for module in modules:  
+        # Check if module class name matches plugin name pattern  
+        if plugin_name.lower() in module.mclass.lower():  
+            active_modules.append(f"{module.name} ({module.mclass})")  
+      
+    if active_modules:  
+        raise cli.CommandError(  
+            f"Cannot unload plugin '{plugin}': it is being used by modules: {', '.join(active_modules)}\n"  
+            f"Please destroy these modules first using 'delete module' command."  
+        )  
+      
+    cli.bess.pause_all()  
+    try:  
+        cli.bess.unload_plugin(plugin)  
+    finally:  
         cli.bess.resume_all()
 
 

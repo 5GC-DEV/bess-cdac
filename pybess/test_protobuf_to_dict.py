@@ -95,7 +95,6 @@ class TestProtobufConvert(unittest.TestCase):
     def test_dict_to_protobuf_msg_has_nested_dict(self):
         pb = test_msg.NestedDictMsg()
 
-        # pb.a = test_msg.UnnestedDictMsg()
         a_dict = {7: 1, 8: 10}
         init_from_dict(pb.a.dict, a_dict)
 

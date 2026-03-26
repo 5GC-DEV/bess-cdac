@@ -78,7 +78,7 @@ def main():
     try:
         run_cmd('%s daemon start -m 0' % bessctl)
     except CommandError:
-        raise Exception('bess daemon could not start')
+        raise RuntimeError('bess daemon could not start')
 
     for file_name in glob.glob(os.path.join(args.test_dir, "{}.py".format(args.test_name))):
         print('Running test %s' % file_name)

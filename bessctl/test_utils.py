@@ -71,7 +71,7 @@ def get_root_tc(bess):
 def measure_tc_perf(bess, duration):
     root_tc = get_root_tc(bess)
     if not root_tc:
-        raise Exception('Fail to find root tc')
+        raise RuntimeError('Fail to find root tc')
 
     old = bess.get_tc_stats(root_tc.name)
     sleep(duration)
@@ -200,7 +200,7 @@ class BessModuleTestCase(unittest.TestCase):
         try:
             self.bess.connect()
         except BESS.APIError:
-            raise Exception('BESS is not running')
+            raise ConnectionError('BESS is not running')
 
         self.bess.pause_all()
         self.bess.reset_all()
@@ -295,7 +295,7 @@ class BessModuleTestCase(unittest.TestCase):
 
         root_tc = get_root_tc(self.bess)
         if not root_tc:
-            raise Exception('Fail to find root tc')
+            raise RuntimeError('Fail to find root tc')
 
         # Get number of packets processed inside bess.
         # Send our packets in, then wait for them to also
