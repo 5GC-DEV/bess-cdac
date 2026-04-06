@@ -40,7 +40,7 @@ import subprocess
 import time
 import shlex
 
-from qmp import QEMUMonitorProtocol
+from qmp import QEMUMonitorProtocol, QMPError
 
 # How many cores we reserve for vSwitches?
 # If set to 2, VMs will run on core 2, 3, 4, ..., skipping core 0-1.
@@ -91,7 +91,7 @@ def get_threads(path):
     def do_command(srv, cmd, **kwds):
         rsp = srv.cmd(cmd, kwds)
         if 'error' in rsp:
-            raise Exception(rsp['error']['desc'])
+            raise QMPError(rsp['error']['desc'])
         return rsp['return']
 
     rsp = do_command(srv, 'query-cpus')
