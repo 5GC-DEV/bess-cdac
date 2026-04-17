@@ -162,340 +162,173 @@ def is_allowed_filename(basename):
 
     return True
 
+def _is_visible_candidate(name, partial_basename):
+    """Check if the file should be shown based on dot-file rules and allowed list."""
+    if name.startswith('.') and not partial_basename.startswith('.'):
+        return False
+    # is_allowed_filename is assumed to be defined in the global/module scope
+    return is_allowed_filename(name)
 
-def complete_filename(partial_word, start_dir='', suffix='',
-                      skip_suffix=False):
+def _process_file_match(name, pattern, suffix, skip_suffix):
+    """Check if file matches pattern and handle suffix stripping."""
+    if not fnmatch.fnmatch(name, pattern):
+        return None
+    
+    if suffix and not skip_suffix and name.endswith(suffix):
+        return name[:-len(suffix)]
+    return name
+
+def complete_filename(partial_word, start_dir='', suffix='', skip_suffix=False):
+    """Refactored complete_filename with Cognitive Complexity < 10."""
     try:
         sub_dir, partial_basename = os.path.split(partial_word)
-        pattern = '%s*%s' % (partial_basename, suffix)
-
-        target_dir = os.path.join(start_dir, os.path.expanduser(sub_dir))
-        if target_dir:
-            basenames = os.listdir(target_dir)
-        else:
-            basenames = os.listdir(os.curdir)
-
-        candidates = []
-        for basename in basenames + ['.', '..']:
-            if basename.startswith('.'):
-                if not partial_basename.startswith('.'):
-                    continue
-
-            if not is_allowed_filename(basename):
+        target_dir = os.path.join(start_dir, os.path.expanduser(sub_dir)) or os.curdir
+        
+        basenames = os.listdir(target_dir) + ['.', '..']
+        pattern = f'{partial_basename}*{suffix}'
+        
+        ret = []
+        for name in basenames:
+            if not _is_visible_candidate(name, partial_basename):
                 continue
 
-            if os.path.isdir(os.path.join(target_dir, basename)):
-                candidates.append(basename + '/')
+            full_path = os.path.join(target_dir, name)
+            
+            if os.path.isdir(full_path):
+                # Handle directories
+                ret.append(os.path.join(sub_dir, name + '/'))
             else:
-                if fnmatch.fnmatch(basename, pattern):
-                    if suffix and not skip_suffix:
-                        basename = basename[:-len(suffix)]
-                    candidates.append(basename)
-
-        ret = []
-        for candidate in candidates:
-            ret.append(os.path.join(sub_dir, candidate))
+                # Handle files
+                processed_name = _process_file_match(name, pattern, suffix, skip_suffix)
+                if processed_name is not None:
+                    ret.append(os.path.join(sub_dir, processed_name))
+        
         return ret
 
     except OSError:
-        # ignore failure of os.listdir()
         return []
 
+# --- Helper Fetchers for Dynamic Data ---
+def _fetch_candidates(cli, func, processor):
+    """Generic wrapper to handle BESS RPC errors during auto-completion."""
+    try:
+        return processor(func())
+    except (AttributeError, Exception):
+        # We ignore errors here as this is only for CLI auto-completion
+        return []
 
+def _get_workers(cli):
+    return _fetch_candidates(cli, cli.bess.list_workers, 
+                             lambda r: [str(m.wid) for m in r.workers_status])
+
+def _get_drivers(cli):
+    return _fetch_candidates(cli, cli.bess.list_drivers, lambda r: r.driver_names)
+
+def _get_mclasses(cli):
+    return _fetch_candidates(cli, cli.bess.list_mclasses, lambda r: r.names)
+
+def _get_modules(cli, include_star=False):
+    names = _fetch_candidates(cli, cli.bess.list_modules, 
+                              lambda r: [m.name for m in r.modules])
+    return (['*'] + names) if include_star else names
+
+def _get_ports(cli):
+    return _fetch_candidates(cli, cli.bess.list_ports, 
+                             lambda r: [p.name for p in r.ports])
+
+def _get_tcs(cli):
+    return _fetch_candidates(cli, cli.bess.list_tcs, 
+                             lambda r: [getattr(c, 'class').name for c in r.classes_status])
+
+def _get_gatehook_classes(cli):
+    return _fetch_candidates(cli, cli.bess.list_gatehook_classes, lambda r: r.names)
+
+# --- Token Registry ---
+# Map: var_token -> (var_type, var_desc, candidate_provider_or_list)
+TOKEN_REGISTRY = {
+    'ENABLE_DISABLE': ('endis', '', ['enable', 'disable']),
+    'CORE': ('int', '', []),
+    '[SOCKET]': ('socket', '', []),
+    'WORKER_ID': ('int', '', _get_workers),
+    'WORKER_ID...': ('wid+', 'one or more worker IDs', _get_workers),
+    'DRIVER': ('name', 'name of a port driver', _get_drivers),
+    'DRIVER...': ('name+', 'one or more port driver names', _get_drivers),
+    'MCLASS': ('name', 'name of a module class', _get_mclasses),
+    'MCLASS...': ('name+', 'one or more module class names', _get_mclasses),
+    '[NEW_MODULE]': ('name', 'specify a name of the new module instance', []),
+    'MODULE': ('name', 'name of an existing module instance', _get_modules),
+    '[MODULE]': ('name', 'name of an existing module instance (* means all)', 
+                 lambda cli: _get_modules(cli, True)),
+    'MODULE...': ('name+', 'one or more module names', _get_modules),
+    'MODULE_CMD': ('name', 'module command to run (see "show mclass")', []),
+    'ARG_TYPE': ('name', 'type of argument (see "show mclass")', []),
+    '[NEW_PORT]': ('name', 'specify a name of the new port', []),
+    '[SCHEDULER]': ('name', 'specify the type of scheduler (none for default)', 
+                    ['', 'experimental']),
+    'PORT': ('name', 'name of a port', _get_ports),
+    'PORT...': ('name+', 'one or more port names', _get_ports),
+    'TC...': ('name+', 'one or more traffic class names', _get_tcs),
+    'PLUGIN_FILE': ('filename', 'plugin filename (*.so)', 
+                    lambda cli, word: complete_filename(word, suffix='.so', skip_suffix=True)),
+    'CONF': ('confname', 'configuration name in "conf/" directory', 
+             lambda cli, word: complete_filename(word, '%s/conf' % cli.this_dir, '.' + CONF_EXT)),
+    'CONF_FILE': ('filename', 'configuration filename', 
+                  lambda cli, word: complete_filename(word)),
+    '[DIRECTION]': ('dir', 'gate direction discriminator (default "out")', ['in', 'out']),
+    'DIRECTION': ('dir', 'gate direction discriminator (default "out")', ['in', 'out']),
+    '[GATE]': ('gate', 'gate index of a module', []),
+    'GATE': ('gate', 'gate index of a module', []),
+    '[OGATE]': ('gate', 'output gate of a module (default 0)', []),
+    '[IGATE]': ('gate', 'input gate of a module (default 0)', []),
+    'GATEHOOKCLASS': ('name', 'name of a gatehook class', _get_gatehook_classes),
+    'GATEHOOKCLASS...': ('name+', 'one or more gatehook class names', _get_gatehook_classes),
+    'GATEHOOK': ('name', 'name of an existing gatehook instance', []),
+    'GATEHOOK_CMD': ('name', 'module command to run (see "show gatehookclass")', []),
+    '[ENV_VARS...]': ('map', 'Environmental variables for configuration', []),
+    '[PORT_ARGS...]': ('map', 'initial configuration for port', []),
+    '[MODULE_ARGS...]': ('pyobj', 'initial configuration for module', []),
+    '[CMD_ARGS...]': ('pyobj', 'arguments for module/gatehook command', []),
+    '[TCPDUMP_OPTS...]': ('opts', 'tcpdump(1) command-line options', []),
+    '[TSHARK_OPTS...]': ('opts', 'tshark(1) command-line options', []),
+    '[GRAPHEASY_OPTS...]': ('opts', 'graph-easy(1p) command-line options', []),
+    '[BESSD_OPTS...]': ('opts', 'bess daemon command-line options', []),
+    '[GRPC_URL]': ('filename', 'gRPC url', []),
+    '[PAUSE_WORKERS]': ('pause_workers', 'determines whether to pause workers', 
+                        ['pause', 'no_pause']),
+    '[HOST]': ('host', 'HTTP server address to listen on (default: "localhost")', []),
+    '[PORT_NUMBER]': ('int', 'HTTP server address to listen on (default: 5000)', []),
+}
+
+# --- Main Dispatcher ---
 def get_var_attrs(cli, var_token, partial_word):
-    var_type = None
-    var_desc = ''
+    """Refactored get_var_attrs with Cognitive Complexity < 15."""
+    if var_token not in TOKEN_REGISTRY:
+        return None
+
+    var_type, var_desc, provider = TOKEN_REGISTRY[var_token]
     var_candidates = []
 
     try:
-        if var_token == 'ENABLE_DISABLE':
-            var_type = 'endis'
-            var_candidates = ['enable', 'disable']
-
-        elif var_token == 'CORE':
-            var_type = 'int'
-
-        elif var_token == '[SOCKET]':
-            var_type = 'socket'
-
-        elif var_token == 'WORKER_ID':
-            var_type = 'int'
-            try:
-                var_candidates = [str(m.wid) for m in
-                                  cli.bess.list_workers().workers_status]
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting worker list: {e}")
-
-        elif var_token == 'WORKER_ID...':
-            var_type = 'wid+'
-            var_desc = 'one or more worker IDs'
-            try:
-                var_candidates = [str(m.wid) for m in
-                                  cli.bess.list_workers().workers_status]
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting worker list: {e}")
-
-        elif var_token == 'DRIVER':
-            var_type = 'name'
-            var_desc = 'name of a port driver'
-            try:
-                var_candidates = cli.bess.list_drivers().driver_names
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting driver list: {e}")
-
-        elif var_token == 'DRIVER...':
-            var_type = 'name+'
-            var_desc = 'one or more port driver names'
-            try:
-                var_candidates = cli.bess.list_drivers().driver_names
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting driver list: {e}")
-
-        elif var_token == 'MCLASS':
-            var_type = 'name'
-            var_desc = 'name of a module class'
-            try:
-                var_candidates = cli.bess.list_mclasses().names
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting module class list: {e}")
-
-        elif var_token == 'MCLASS...':
-            var_type = 'name+'
-            var_desc = 'one or more module class names'
-            try:
-                var_candidates = cli.bess.list_mclasses().names
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting module class list: {e}")
-
-        elif var_token == '[NEW_MODULE]':
-            var_type = 'name'
-            var_desc = 'specify a name of the new module instance'
-
-        elif var_token == 'MODULE':
-            var_type = 'name'
-            var_desc = 'name of an existing module instance'
-            try:
-                var_candidates = [m.name for m in
-                                  cli.bess.list_modules().modules]
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting module list: {e}")
-
-        elif var_token == '[MODULE]':
-            var_type = 'name'
-            var_desc = 'name of an existing module instance (* means all)'
-            var_candidates = ['*']
-            try:
-                var_candidates += [m.name for m in
-                                   cli.bess.list_modules().modules]
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting module list: {e}")
-
-        elif var_token == 'MODULE...':
-            var_type = 'name+'
-            var_desc = 'one or more module names'
-            try:
-                var_candidates = [m.name for m in
-                                  cli.bess.list_modules().modules]
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting module list: {e}")
-
-        elif var_token == 'MODULE_CMD':
-            var_type = 'name'
-            var_desc = 'module command to run (see "show mclass")'
-
-        elif var_token == 'ARG_TYPE':
-            var_type = 'name'
-            var_desc = 'type of argument (see "show mclass")'
-
-        elif var_token == '[NEW_PORT]':
-            var_type = 'name'
-            var_desc = 'specify a name of the new port'
-
-        elif var_token == '[SCHEDULER]':
-            var_type = 'name'
-            var_desc = 'specify the type of scheduler (none for default)'
-            var_candidates = ['', 'experimental']
-
-        elif var_token == 'PORT':
-            var_type = 'name'
-            var_desc = 'name of a port'
-            try:
-                var_candidates = [p.name for p in cli.bess.list_ports().ports]
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting port list: {e}")
-
-        elif var_token == 'PORT...':
-            var_type = 'name+'
-            var_desc = 'one or more port names'
-            try:
-                var_candidates = [p.name for p in cli.bess.list_ports().ports]
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting port list: {e}")
-
-        elif var_token == 'TC...':
-            var_type = 'name+'
-            var_desc = 'one or more traffic class names'
-            try:
-                var_candidates = [getattr(c, 'class').name
-                                  for c in cli.bess.list_tcs().classes_status]
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting traffic class list: {e}")
-
-        elif var_token == 'CONF':
-            var_type = 'confname'
-            var_desc = 'configuration name in "conf/" directory'
-            var_candidates = complete_filename(partial_word,
-                                               '%s/conf' % cli.this_dir,
-                                               '.' + CONF_EXT)
-
-        elif var_token == 'CONF_FILE':
-            var_type = 'filename'
-            var_desc = 'configuration filename'
-            var_candidates = complete_filename(partial_word)
-
-        elif var_token == 'PLUGIN_FILE':
-            var_type = 'filename'
-            var_desc = 'plugin filename (*.so)'
-            var_candidates = complete_filename(partial_word, suffix='.so',
-                                               skip_suffix=True)
-
-        elif var_token in ('[DIRECTION]', 'DIRECTION'):
-            var_type = 'dir'
-            var_desc = 'gate direction discriminator (default "out")'
-            var_candidates = ['in', 'out']
-
-        elif var_token in ('[GATE]', 'GATE'):
-            var_type = 'gate'
-            var_desc = 'gate index of a module'
-
-        elif var_token == '[OGATE]':
-            var_type = 'gate'
-            var_desc = 'output gate of a module (default 0)'
-
-        elif var_token == '[IGATE]':
-            var_type = 'gate'
-            var_desc = 'input gate of a module (default 0)'
-
-        elif var_token == 'GATEHOOKCLASS':
-            var_type = 'name'
-            var_desc = 'name of a gatehook class'
-            try:
-                var_candidates = cli.bess.list_gatehook_classes().names
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting gatehook class list: {e}")
-
-        elif var_token == 'GATEHOOKCLASS...':
-            var_type = 'name+'
-            var_desc = 'one or more gatehook class names'
-            try:
-                var_candidates = cli.bess.list_gatehook_classes().names
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error getting gatehook class list: {e}")
-
-        elif var_token == 'GATEHOOK':
-            var_type = 'name'
-            var_desc = 'name of an existing gatehook instance'
-
-        elif var_token == 'GATEHOOK_CMD':
-            var_type = 'name'
-            var_desc = 'module command to run (see "show gatehookclass")'
-
-        elif var_token == '[ENV_VARS...]':
-            var_type = 'map'
-            var_desc = 'Environmental variables for configuration'
-
-        elif var_token == '[PORT_ARGS...]':
-            var_type = 'map'
-            var_desc = 'initial configuration for port'
-
-        elif var_token == '[MODULE_ARGS...]':
-            var_type = 'pyobj'
-            var_desc = 'initial configuration for module'
-
-        elif var_token == '[CMD_ARGS...]':
-            var_type = 'pyobj'
-            var_desc = 'arguments for module/gatehook command'
-
-        elif var_token == '[TCPDUMP_OPTS...]':
-            var_type = 'opts'
-            var_desc = 'tcpdump(1) command-line options ' \
-                '(e.g., "-ne tcp port 22")'
-
-        elif var_token == '[TSHARK_OPTS...]':
-            var_type = 'opts'
-            var_desc = 'tshark(1) command-line options ' \
-                '(default "-z proto,colinfo,frame.comment,frame.comment")'
-
-        elif var_token == '[GRAPHEASY_OPTS...]':
-            var_type = 'opts'
-            var_desc = 'graph-easy(1p) command-line options ' \
-                '(e.g. --as dot | dot -Tsvg -o graph.svg)'
-
-        elif var_token == '[BESSD_OPTS...]':
-            var_type = 'opts'
-            var_desc = 'bess daemon command-line options (see "bessd -h")'
-
-        elif var_token == '[GRPC_URL]':
-            var_type = 'filename'
-            var_desc = 'gRPC url'
-
-        elif var_token == '[PAUSE_WORKERS]':
-            var_type = 'pause_workers'
-            var_desc = 'determines whether to pause workers for the operation (default: "pause")'
-            var_candidates = ['pause', 'no_pause']
-
-        elif var_token == '[HOST]':
-            var_type = 'host'
-            var_desc = 'HTTP server address to listen on (default: "localhost")'
-
-        elif var_token == '[PORT_NUMBER]':
-            var_type = 'int'
-            var_desc = 'HTTP server address to listen on (default: 5000)'
-
+        if callable(provider):
+            # Check if provider needs partial_word (for filenames) or just cli
+            import inspect
+            sig = inspect.signature(provider)
+            if len(sig.parameters) == 2:
+                var_candidates = provider(cli, partial_word)
+            else:
+                var_candidates = provider(cli)
+        else:
+            var_candidates = provider
 
     except socket.error as e:
         if e.errno in [errno.ECONNRESET, errno.EPIPE]:
             cli.bess.disconnect()
         else:
             raise
-
     except (cli.bess.Error, cli.bess.APIError, cli.bess.RPCError):
-        # ignore errors, this is just auto completion
         pass
 
-    if var_type is None:
-        return None
-    else:
-        return var_type, var_desc, var_candidates
-
+    return var_type, var_desc, var_candidates
 
 # Return (head, tail)
 #   head: consumed string portion
@@ -530,99 +363,85 @@ def _parse_map(**kwargs):
 # Return (mapped_value, tail)
 #   mapped_value: Python value/object from the consumed token(s)
 #   tail: the rest of input line
-def bind_var(cli, var_type, line):
-    head, remainder = split_var(cli, var_type, line)
-
-    # default behavior
-    val = head
-
+def _handle_endis_dir(cli, val, var_type):
     if var_type == 'endis':
-        if 'enable'.startswith(val):
-            val = 'enable'
-        elif 'disable'.startswith(val):
-            val = 'disable'
-        else:
-            raise cli.BindError('"endis" must be either "enable" or "disable"')
+        if 'enable'.startswith(val): return 'enable'
+        if 'disable'.startswith(val): return 'disable'
+        raise cli.BindError('"endis" must be either "enable" or "disable"')
+    if var_type == 'dir':
+        if 'in'.startswith(val): return 'in'
+        if 'out'.startswith(val): return 'out'
+        raise cli.BindError('"dir" must be either "in" or "out"')
 
-    elif var_type == 'dir':
-        if 'in'.startswith(val):
-            val = 'in'
-        elif 'out'.startswith(val):
-            val = 'out'
-        else:
-            raise cli.BindError('"dir" must be either "in" or "out"')
+def _handle_numeric(cli, val, var_type):
+    if var_type in ['gate', 'socket']:
+        if val.isdigit(): return int(val)
+        raise cli.BindError(f'"{var_type}" must be a positive number')
+    try:
+        return int(val)
+    except Exception:
+        raise cli.BindError('Expected an integer')
 
-    elif var_type == 'wid+':
-        val = []
-        for wid_str in head.split():
-            if wid_str.isdigit():
-                val.append(int(wid_str))
-            else:
-                raise cli.BindError('"wid" must be a positive number')
-        val = sorted(list(set(val)))
+def _handle_collections(cli, val, var_type):
+    if var_type == 'wid+':
+        res = []
+        for x in val.split():
+            if not x.isdigit(): raise cli.BindError('"wid" must be a positive number')
+            res.append(int(x))
+        return sorted(list(set(res)))
+    if var_type == VAR_TYPE_NAME_PLUS:
+        return sorted(list(set(val.split())))
+    if var_type == 'opts':
+        return val.split()
 
-    elif var_type == 'host':
+def _handle_validation(cli, val, var_type):
+    if var_type == 'host':
         dns = re.match(r'^[a-zA-Z0-9][a-zA-Z0-9\-.]*$', val)
         ip = re.match(r'^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$', val)
         if dns is None and ip is None:
-            raise cli.BindError(
-                '"host" must be a valid DNS name or IPv4 address')
+            raise cli.BindError('"host" must be a valid DNS name or IPv4 address')
+    elif var_type == 'name' and re.match(r'^[\S]*$', val) is None:
+        raise cli.BindError('"name" must not contain whitespaces')
+    elif var_type in ['confname', 'filename'] and '\0' in val:
+        raise cli.BindError(f'Invalid {var_type}')
+    return val
 
-    elif var_type == 'name':
-        if re.match(r'^[\S]*$', val) is None:
-            raise cli.BindError('"name" must not contain whitespaces')
+def _handle_eval(cli, val, var_type):
+    try:
+        if var_type == 'map':
+            return eval('_parse_map(%s)' % val)
+        # pyobj case
+        return eval(val) if val.strip() != '' else None
+    except Exception as e:
+        msg = '"map" should be "key=val..."' if var_type == 'map' else \
+              '"pyobj" should be an object in python syntax'
+        raise cli.BindError(msg)
 
-    elif var_type == 'gate':
-        if head.isdigit():
-            val = int(head)
-        else:
-            raise cli.BindError('"gate" must be a positive number')
+def bind_var(cli, var_type, line):
+    """Refactored bind_var with Cognitive Complexity < 15."""
+    head, remainder = split_var(cli, var_type, line)
+    
+    # Map types to their respective handler functions
+    handler_map = {
+        'endis': _handle_endis_dir,
+        'dir': _handle_endis_dir,
+        'gate': _handle_numeric,
+        'socket': _handle_numeric,
+        'int': _handle_numeric,
+        'wid+': _handle_collections,
+        VAR_TYPE_NAME_PLUS: _handle_collections,
+        'opts': _handle_collections,
+        'host': _handle_validation,
+        'name': _handle_validation,
+        'confname': _handle_validation,
+        'filename': _handle_validation,
+        'map': _handle_eval,
+        'pyobj': _handle_eval,
+    }
 
-    elif var_type == 'socket':
-        if head.isdigit():
-            val = int(head)
-        else:
-            raise cli.BindError('"socket" must be a positive number')
-
-    elif var_type == VAR_TYPE_NAME_PLUS:
-        val = sorted(list(set(head.split())))  # collect unique items
-
-    elif var_type == 'confname':
-        if val.find('\0') >= 0:
-            raise cli.BindError('Invalid configuration name')
-
-    elif var_type == 'filename':
-        if val.find('\0') >= 0:
-            raise cli.BindError('Invalid filename')
-
-    elif var_type == 'map':
-        try:
-            val = eval('_parse_map(%s)' % head)
-        except Exception as e:
-            print(f"Map parsing error: {e}")
-            raise cli.BindError('"map" should be "key=val, key=val, ..."')
-
-    elif var_type == 'pyobj':
-        try:
-            if head.strip() == '':
-                val = None
-            else:
-                val = eval(head)
-        except Exception as e:
-            print(f"Python object parsing error: {e}")
-            raise cli.BindError(
-                '"pyobj" should be an object in python syntax'
-                ' (e.g., 42, "foo", ["hello", "world"], {"bar": "baz"})')
-
-    elif var_type == 'opts':
-        val = val.split()
-
-    elif var_type == 'int':
-        try:
-            val = int(val)
-        except Exception:
-            raise cli.BindError('Expected an integer')
-
+    handler = handler_map.get(var_type)
+    val = handler(cli, head, var_type) if handler else head
+    
     return val, remainder
 
 
@@ -1435,73 +1254,66 @@ def show_status(cli):
         cli.fout.write(NONE_MESSAGE)
 
 
-# last_stats: a map of (node name, gateid) -> (timestamp, counter value)
-def _draw_pipeline(cli, field, units, last_stats=None, graph_args=[]):
-    if graph_args is None:
-        graph_args = []
-
-    modules = sorted(cli.bess.list_modules().modules, key=lambda x: x.name)
-    names = []
+def _get_node_labels(modules):
+    """Pre-calculate display labels for all modules."""
     node_labels = {}
-
     for m in modules:
-        name = m.name
-        mclass = m.mclass
-        names.append(name)
-        node_labels[name] = '%s\\n%s' % (name, mclass)
-        node_labels[name] += '\\n%s' % m.desc
+        label = f"{m.name}\\n{m.mclass}\\n{m.desc}"
+        node_labels[m.name] = label
+    return node_labels
+
+def _get_gate_label(gate, field, name, last_stats):
+    """Determine the value/label to show on a graph edge."""
+    if gate.timestamp == 0.0:
+        return '?'
+
+    # Case A: Static Pipeline View
+    if last_stats is None:
+        val = getattr(gate, field)
+    # Case B: Monitoring View (calculate rate)
+    else:
+        last_time, last_val = last_stats[(name, gate.ogate)]
+        new_time, new_val = gate.timestamp, getattr(gate, field)
+        last_stats[(name, gate.ogate)] = (new_time, new_val)
+        val = (new_val - last_val) / (new_time - last_time)
+
+    return '%.1f' % (val * 8 / 1e6) if field == 'bytes' else '%d' % val
+
+def _draw_pipeline(cli, field, units, last_stats=None, graph_args=None):
+    """Draw pipeline visualization with reduced complexity."""
+    graph_args = graph_args or []
+    modules = sorted(cli.bess.list_modules().modules, key=lambda x: x.name)
+    node_labels = _get_node_labels(modules)
 
     try:
-        f = subprocess.Popen('graph-easy ' + ' '.join(graph_args), shell=True,
-                             stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE,
-                             universal_newlines=True)
+        proc = subprocess.Popen(['graph-easy'] + graph_args, 
+                                stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                universal_newlines=True)
 
+        # 1. Define Nodes
         for m in modules:
-            print('[%s]' % node_labels[m.name], file=f.stdin)
+            proc.stdin.write(f'[{node_labels[m.name]}]\n')
 
-        for name in names:
-            gates = cli.bess.get_module_info(name).ogates
-
+        # 2. Define Edges (Connections)
+        for m in modules:
+            gates = cli.bess.get_module_info(m.name).ogates
             for gate in gates:
-                if gate.timestamp == 0.0:  # stats disabled?
-                    label = '?'
-                else:
-                    if last_stats is None:  # show pipeline
-                        val = getattr(gate, field)
-                    else:  # monitor pipeline
-                        last_time, last_val = last_stats[(name, gate.ogate)]
-                        new_time, new_val = gate.timestamp, getattr(
-                            gate, field)
-                        last_stats[(name, gate.ogate)] = (new_time, new_val)
+                label = _get_gate_label(gate, field, m.name, last_stats)
+                edge_attr = f'{{label::{gate.ogate}  {label} {units} {gate.igate}:;}}'
+                
+                line = f'[{node_labels[m.name]}] ->{edge_attr} [{node_labels[gate.name]}]\n'
+                proc.stdin.write(line)
 
-                        val = (new_val - last_val) / (new_time - last_time)
-
-                    if field == 'bytes':
-                        label = '%.1f' % (val * 8 / 1e6)
-                    else:
-                        label = '%d' % val
-
-                edge_attr = '{label::%d  %s %s %d:;}' % (
-                    gate.ogate, label, units, gate.igate)
-
-                print('[%s] ->%s [%s]' % (
-                    node_labels[name],
-                    edge_attr,
-                    node_labels[gate.name]), file=f.stdin)
-        output, error = f.communicate()
-        f.wait()
+        output, _ = proc.communicate()
         return output
 
     except IOError as e:
         if e.errno == errno.EPIPE:
-            raise cli.CommandError('"graph-easy" program is not available? '
-                                   'Check if the package "libgraph-easy-perl" '
-                                   'is installed.')
-        else:
-            raise
-
+            raise cli.CommandError('"graph-easy" program not available. '
+                                   'Install "libgraph-easy-perl".')
+        raise
 
 @cmd('show pipeline [GRAPHEASY_OPTS...]', 'Show the current datapath pipeline')
 def show_pipeline(cli, opts):
@@ -1589,62 +1401,66 @@ def show_port_list(cli, port_names):
             raise cli.CommandError('Port "%s" doest not exist' % port_name)
 
 
+def _get_gate_stats_str(gate, gate_type="gate"):
+    """Format gate statistics with error handling."""
+    try:
+        return 'batches %-11d packets %-12d' % (gate.cnt, gate.pkts)
+    except AttributeError:
+        return 'batches N/A packets N/A'
+    except Exception as e:
+        print(f"Error formatting {gate_type} stats: {e}")
+        return 'batches N/A packets N/A'
+
+def _print_metadata(cli, metadata):
+    """Format and print per-packet metadata fields."""
+    if not metadata:
+        return
+        
+    cli.fout.write('    Per-packet metadata fields:\n')
+    for field in metadata:
+        cli.fout.write('%16s %-6s%2d bytes ' %
+                       (field.name + ':', field.mode, field.size))
+        
+        if field.offset >= 0:
+            cli.fout.write('at offset %d\n' % field.offset)
+        elif field.offset == -1:
+            cli.fout.write('(no downstream reader)\n')
+        elif field.offset == -2:
+            cli.fout.write('(no upstream writer)\n')
+        else:
+            cli.fout.write('\n')
+
 def _show_module(cli, module_name):
+    """Display detailed information about a specific module."""
     info = cli.bess.get_module_info(module_name)
 
     cli.fout.write('  %s::%s(%s)\n' % (info.name, info.mclass, info.desc))
 
-    if len(info.metadata) > 0:
-        cli.fout.write('    Per-packet metadata fields:\n')
-        for field in info.metadata:
-            cli.fout.write('%16s %-6s%2d bytes ' %
-                           (field.name + ':', field.mode, field.size))
+    # 1. Print Metadata (extracted to reduce branching complexity)
+    _print_metadata(cli, info.metadata)
 
-            if field.offset >= 0:
-                cli.fout.write('at offset %d\n' % field.offset)
-            elif field.offset == -1:
-                cli.fout.write('(no downstream reader)\n')
-            elif field.offset == -2:
-                cli.fout.write('(no upstream writer)\n')
-            else:
-                cli.fout.write('\n')
-
-    if len(info.igates) > 0:
+    # 2. Print Input Gates
+    if info.igates:
         cli.fout.write('    Input gates:\n')
         for gate in info.igates:
-            track_str = 'batches N/A packets N/A'
-            try:
-                track_str = 'batches %-11d packets %-12d' % (gate.cnt,
-                                                             gate.pkts)
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error formatting gate stats: {e}")
+            track_str = _get_gate_stats_str(gate, "input gate")
             cli.fout.write('      %3d: %s %s\t%s\n' %
                            (gate.igate, track_str,
-                            ', '.join('%s:%d ->' % (g.name, g.ogate)
-                                      for g in gate.ogates),
-                            ', '.join('%s::%s' % (h.class_name, h.hook_name)
-                                      for h in gate.gatehooks)))
+                            ', '.join('%s:%d ->' % (g.name, g.ogate) for g in gate.ogates),
+                            ', '.join('%s::%s' % (h.class_name, h.hook_name) for h in gate.gatehooks)))
 
-    if len(info.ogates) > 0:
+    # 3. Print Output Gates
+    if info.ogates:
         cli.fout.write('    Output gates:\n')
         for gate in info.ogates:
-            track_str = 'batches N/A packets N/A'
-            try:
-                track_str = 'batches %-11d packets %-12d' % (gate.cnt,
-                                                             gate.pkts)
-            except AttributeError:
-                pass
-            except Exception as e:
-                print(f"Error formatting output gate stats: {e}")
-            cli.fout.write(
-                '      %3d: %s -> %d:%s\t%s\n' %
-                (gate.ogate, track_str, gate.igate, gate.name,
-                 ', '.join("%s::%s" % (h.class_name, h.hook_name)
-                           for h in gate.gatehooks)))
+            track_str = _get_gate_stats_str(gate, "output gate")
+            cli.fout.write('      %3d: %s -> %d:%s\t%s\n' %
+                           (gate.ogate, track_str, gate.igate, gate.name,
+                            ', '.join("%s::%s" % (h.class_name, h.hook_name) for h in gate.gatehooks)))
+
     cli.fout.write('    Deadends: %-12d\n' % (info.deadends,))
 
+    # 4. Print Dump
     if hasattr(info, 'dump'):
         dump_str = pprint.pformat(info.dump, width=74)
         dump_str = '\n      '.join(dump_str.split('\n'))
@@ -1754,14 +1570,29 @@ def import_plugin(cli, plugin):
         cli.bess.resume_all()
 
 
-@cmd('unload plugin PLUGIN_FILE', 'Unload the specified plugin (*.so)')
-def unload_plugin(cli, plugin):
-    # FIXME check whether the plugin is being used
-    # currently this command can crash the BESS daemon
-    cli.bess.pause_all()
-    try:
-        cli.bess.unload_plugin(plugin)
-    finally:
+@cmd('unload plugin PLUGIN_FILE', 'Unload the specified plugin (*.so)')  
+def unload_plugin(cli, plugin):  
+    # Check if plugin is being used by any modules  
+    modules = cli.bess.list_modules().modules  
+    plugin_name = os.path.splitext(os.path.basename(plugin))[0]  
+      
+    # Look for modules that might be from this plugin  
+    active_modules = []  
+    for module in modules:  
+        # Check if module class name matches plugin name pattern  
+        if plugin_name.lower() in module.mclass.lower():  
+            active_modules.append(f"{module.name} ({module.mclass})")  
+      
+    if active_modules:  
+        raise cli.CommandError(  
+            f"Cannot unload plugin '{plugin}': it is being used by modules: {', '.join(active_modules)}\n"  
+            f"Please destroy these modules first using 'delete module' command."  
+        )  
+      
+    cli.bess.pause_all()  
+    try:  
+        cli.bess.unload_plugin(plugin)  
+    finally:  
         cli.bess.resume_all()
 
 
@@ -1847,88 +1678,81 @@ PortRate = collections.namedtuple('PortRate',
                                    'out_packets', 'out_dropped', 'out_bytes'])
 
 
-def _monitor_ports(cli, *ports):
+def _calculate_port_delta(old, new):
+    """Calculate rate-based statistics for port."""
+    sec_diff = new.timestamp - old.timestamp
+    return PortRate(
+        inc_packets=(new.inc.packets - old.inc.packets) / sec_diff,
+        inc_dropped=(new.inc.dropped - old.inc.dropped) / sec_diff,
+        inc_bytes=(new.inc.bytes - old.inc.bytes) / sec_diff,
+        out_packets=(new.out.packets - old.out.packets) / sec_diff,
+        out_dropped=(new.out.dropped - old.out.dropped) / sec_diff,
+        out_bytes=(new.out.bytes - old.out.bytes) / sec_diff
+    )
 
-    def get_delta(old, new):
-        sec_diff = new.timestamp - old.timestamp
-        delta = PortRate(
-            inc_packets=(new.inc.packets - old.inc.packets) / sec_diff,
-            inc_dropped=(new.inc.dropped - old.inc.dropped) / sec_diff,
-            inc_bytes=(new.inc.bytes - old.inc.bytes) / sec_diff,
-            out_packets=(new.out.packets - old.out.packets) / sec_diff,
-            out_dropped=(new.out.dropped - old.out.dropped) / sec_diff,
-            out_bytes=(new.out.bytes - old.out.bytes) / sec_diff)
-        return delta
+def _aggregate_port_stats(stats_array):
+    """Aggregate statistics from multiple ports."""
+    total = copy.deepcopy(stats_array[0])
+    for stat in stats_array[1:]:
+        total.inc.packets += stat.inc.packets
+        total.inc.dropped += stat.inc.dropped
+        total.inc.bytes += stat.inc.bytes
+        total.out.packets += stat.out.packets
+        total.out.dropped += stat.out.dropped
+        total.out.bytes += stat.out.bytes
+    return total
 
-    def print_header(timestamp):
+def _format_and_write_port_data(cli, name, delta, csv_f=None):
+    """Format and write a single line of port data."""
+    # If inc/out_bytes == 0 and inc_packets != 0, driver doesn't account packet bytes.
+    inc_mbps = ((delta.inc_bytes + delta.inc_packets * 24) * 8 / 1e6) if delta.inc_bytes else 0.0
+    out_mbps = ((delta.out_bytes + delta.out_packets * 24) * 8 / 1e6) if delta.out_bytes else 0.0
+
+    data = (inc_mbps, delta.inc_packets / 1e6, int(delta.inc_dropped),
+            out_mbps, delta.out_packets / 1e6, int(delta.out_dropped))
+            
+    cli.fout.write('{:<20}{:>14.1f}{:>10.3f}{:>10d}        {:>14.1f}{:>10.3f}{:>10d}\n'.format(name, *data))
+    if csv_f is not None:
+        csv_line = '{},{},{}\n'.format(time.strftime('%X'), name, ','.join('{:.3f}'.format(x) for x in data))
+        csv_f.write(csv_line)
+
+def _monitor_ports_loop(cli, ports, drivers, csv_f=None):
+    """Main monitoring loop for ports."""
+    last = {port: cli.bess.get_port_stats(port) for port in ports}
+    
+    while True:
+        time.sleep(1)
+        now = {port: cli.bess.get_port_stats(port) for port in ports}
+        
+        # 1. Write Header
+        timestamp = now[ports[-1]].timestamp
         cli.fout.write('\n')
         cli.fout.write('{:<20}{:>14}{:>10}{:>10}        {:>14}{:>10}{:>10}\n'.format(
                        time.strftime('%X') + str(timestamp % 1)[1:8],
                        'INC     Mbps', 'Mpps', 'dropped', 'OUT     Mbps', 'Mpps', 'Dropped'))
-
         cli.fout.write('{}\n'.format('-' * 96))
-
-    def print_footer():
+        
+        # 2. Write Deltas
+        for port in ports:
+            delta = _calculate_port_delta(last[port], now[port])
+            _format_and_write_port_data(cli, '{}{}'.format(port, drivers[port]), delta, csv_f)
+            
         cli.fout.write('{}\n'.format('-' * 96))
+        
+        # 3. Write Totals (if applicable)
+        if len(ports) > 1:
+            total_last = _aggregate_port_stats(list(last.values()))
+            total_now = _aggregate_port_stats(list(now.values()))
+            total_delta = _calculate_port_delta(total_last, total_now)
+            _format_and_write_port_data(cli, 'Total', total_delta, csv_f)
+            
+        # 4. Update stats for next loop
+        last = now
 
-    def print_delta(timestamp, port, delta, csv_f=None):
-        # If inc/out_bytes == 0 and inc_packets != 0, it means the
-        # driver does not account packet bytes.
-        # Use 0 rather than inaccurate numbers from Ethernet overheads.
-        if delta.inc_bytes:
-            inc_mbps = (delta.inc_bytes + delta.inc_packets * 24) * 8 / 1e6
-        else:
-            inc_mbps = 0.
-
-        if delta.out_bytes:
-            out_mbps = (delta.out_bytes + delta.out_packets * 24) * 8 / 1e6
-        else:
-            out_mbps = 0.
-
-        data = (inc_mbps, delta.inc_packets / 1e6, int(delta.inc_dropped), out_mbps, delta.out_packets / 1e6,
-                int(delta.out_dropped))
-        cli.fout.write('{:<20}{:>14.1f}{:>10.3f}{:>10d}        {:>14.1f}{:>10.3f}{:>10d}\n'.format(port, *data))
-        if csv_f is not None:
-            csv_f.write('{},{},{}\n'.format(time.strftime('%X'), port, ','.join(map(lambda x: '{:.3f}'.format(x), data))))
-
-    def get_total(arr):
-        total = copy.deepcopy(arr[0])
-        for stat in arr[1:]:
-            total.inc.packets += stat.inc.packets
-            total.inc.dropped += stat.inc.dropped
-            total.inc.bytes += stat.inc.bytes
-            total.out.packets += stat.out.packets
-            total.out.dropped += stat.out.dropped
-            total.out.bytes += stat.out.bytes
-        return total
-
-    def print_loop(csv_f=None):
-        while True:
-            time.sleep(1)
-
-            for port in ports:
-                now[port] = cli.bess.get_port_stats(port)
-
-            print_header(now[port].timestamp)
-
-            for port in ports:
-                print_delta(now[port].timestamp, '{}{}'.format(port, drivers[port]),
-                            get_delta(last[port], now[port]), csv_f)
-
-            print_footer()
-
-            if len(ports) > 1:
-                print_delta(now[port].timestamp, 'Total', get_delta(
-                    get_total(list(last.values())),
-                    get_total(list(now.values()))), csv_f)
-
-            for port in ports:
-                last[port] = now[port]
-
+def _monitor_ports(cli, *ports):
+    """Monitor port statistics."""
     all_ports = sorted(cli.bess.list_ports().ports, key=lambda x: x.name)
-    drivers = {}
-    for port in all_ports:
-        drivers[port.name] = port.driver
+    drivers = {port.name: port.driver for port in all_ports}
 
     if not ports:
         ports = [port.name for port in all_ports]
@@ -1937,22 +1761,15 @@ def _monitor_ports(cli, *ports):
 
     cli.fout.write('Monitoring ports: {}\n'.format(', '.join(ports)))
 
-    last = {}
-    now = {}
-
-    for port in ports:
-        last[port] = cli.bess.get_port_stats(port)
-
     try:
         csv_path = os.getenv('CSV', None)
         with open(csv_path, 'w') if csv_path is not None else noop() as csv_f:
             if csv_f is not None:
                 csv_f.write('{}\n'.format(','.join(
                     ('Timestamp', 'Port', 'Mbps In', 'Mpps In', 'Dropped In', 'Mbps Out', 'Mpps Out', 'Dropped Out'))))
-            print_loop(csv_f)
+            _monitor_ports_loop(cli, ports, drivers, csv_f)
     except KeyboardInterrupt:
         pass
-
 
 @cmd('monitor port', 'Monitor the current traffic of all ports')
 def monitor_port_all(cli):
@@ -1968,92 +1785,89 @@ TcCounterRate = collections.namedtuple('TcCounterRate',
                                        ['count', 'cycles', 'bits', 'packets'])
 
 
-def _monitor_tcs(cli, *tcs):
-    GUTTER_WIDTH = 5
-    FIELDS = ('CPU MHz', 'scheduled', 'Mpps', 'Mbps', 'pkts/sched', 'cycles/p')
+def _calculate_tc_delta(old, new):  
+    """Calculate rate-based statistics for traffic class."""  
+    sec_diff = new.timestamp - old.timestamp  
+    return TcCounterRate(  
+        count=(new.count - old.count) / sec_diff,  
+        cycles=(new.cycles - old.cycles) / sec_diff,  
+        bits=(new.bits - old.bits) / sec_diff,  
+        packets=(new.packets - old.packets) / sec_diff  
+    )  
 
-    def get_delta(old, new):
-        sec_diff = new.timestamp - old.timestamp
-        delta = TcCounterRate(count=(new.count - old.count) / sec_diff,
-                              cycles=(new.cycles - old.cycles) / sec_diff,
-                              bits=(new.bits - old.bits) / sec_diff,
-                              packets=(new.packets - old.packets) / sec_diff)
-        return delta
-
-    def print_header(timestamp, name_len):
-        cli.fout.write('\n')
-        fmt = '{:<%d}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}\n' % (name_len,)
-        cli.fout.write(fmt.format(time.strftime('%X') + str(timestamp % 1)[1:8], *FIELDS))
-
-        cli.fout.write('{}\n'.format(('-' * (72 + name_len))))
-
-    def print_footer(name_len):
-        cli.fout.write('{}\n'.format('-' * (72 + name_len)))
-
-    def print_delta(timestamp, tc, delta, name_len, csv_f=None):
-        if delta.count >= 1:
-            ppb = delta.packets / delta.count
-        else:
-            ppb = 0.
-
-        if delta.packets >= 1:
-            cpp = delta.cycles / delta.packets
-        else:
-            cpp = 0.
-
-        data = (delta.cycles / 1e6, int(delta.count), delta.packets / 1e6, delta.bits / 1e6, ppb, cpp)
-        fmt = '{:<%d}{:>12.3f}{:>12d}{:>12.3f}{:>12.3f}{:>12.3f}{:>12.3f}\n' % (name_len,)
-        cli.fout.write(fmt.format(tc, *data))
-        if csv_f is not None:
-            csv_f.write('{},{},{}\n'.format(time.strftime('%X'), tc, ','.join(map(lambda x: '{:.3f}'.format(x), data))))
-
-    def print_loop(csv=None):
-        while True:
-            time.sleep(1)
-
-            for tc in tcs:
-                now[tc] = cli.bess.get_tc_stats(tc)
-
-            print_header(now[tc].timestamp, max_len)
-
-            for tc in tcs:
-                print_delta(now[tc].timestamp, 'W{} {}'.format(wids[tc], tc),
-                            get_delta(last[tc], now[tc]), max_len, csv)
-
-            print_footer(max_len)
-
-            for tc in tcs:
-                last[tc] = now[tc]
-
-    all_tcs = cli.bess.list_tcs().classes_status
-    wids = {}
-    max_len = 0
-    for tc in all_tcs:
-        class_ = getattr(tc, 'class')
-        max_len = max(len(class_.name), max_len)
-        wids[class_.name] = class_.wid
-    max_len += GUTTER_WIDTH
-
-    if not tcs:
-        tcs = [getattr(tc, 'class').name for tc in all_tcs]
-        if not tcs:
-            raise cli.CommandError('No traffic class to monitor')
-
-    cli.fout.write('Monitoring traffic classes: {}\n'.format(', '.join(tcs)))
-
-    last = {}
-    now = {}
-
-    for tc in tcs:
-        last[tc] = cli.bess.get_tc_stats(tc)
-
-    try:
-        csv_path = os.getenv('CSV', None)
-        with open(csv_path, 'w') if csv_path is not None else noop() as csv_f:
-            if csv_f is not None:
-                csv_f.write('{}\n'.format(','.join(('Timestamp','traffic class',) + FIELDS)))
-            print_loop(csv_f)
-    except KeyboardInterrupt:
+def _format_tc_data(delta):  
+    """Calculate ratios and format traffic class data for display."""  
+    ppb = delta.packets / delta.count if delta.count >= 1 else 0.0  
+    cpp = delta.cycles / delta.packets if delta.packets >= 1 else 0.0  
+    return (delta.cycles / 1e6, int(delta.count), delta.packets / 1e6, delta.bits / 1e6, ppb, cpp)  
+  
+def _monitor_tc_loop(cli, tcs, wids, max_len, fields, csv_f=None):  
+    """Main monitoring loop for traffic classes."""  
+    last_stats = {tc: cli.bess.get_tc_stats(tc) for tc in tcs}  
+      
+    while True:  
+        time.sleep(1)  
+        current_stats = {tc: cli.bess.get_tc_stats(tc) for tc in tcs}  
+          
+        # 1. Write Header
+        timestamp = current_stats[tcs[-1]].timestamp  
+        cli.fout.write('\n')  
+        fmt_head = '{:<%d}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}\n' % (max_len,)  
+        cli.fout.write(fmt_head.format(time.strftime('%X') + str(timestamp % 1)[1:8], *fields))  
+        cli.fout.write('{}\n'.format('-' * (72 + max_len)))  
+          
+        # 2. Write Data for each TC
+        for tc in tcs:  
+            delta = _calculate_tc_delta(last_stats[tc], current_stats[tc])  
+            data = _format_tc_data(delta)  
+            tc_display_name = 'W{} {}'.format(wids[tc], tc)  
+            
+            fmt_data = '{:<%d}{:>12.3f}{:>12d}{:>12.3f}{:>12.3f}{:>12.3f}{:>12.3f}\n' % (max_len,)  
+            cli.fout.write(fmt_data.format(tc_display_name, *data))  
+              
+            if csv_f is not None:  
+                csv_line = '{},{},{}\n'.format(  
+                    time.strftime('%X'),   
+                    tc_display_name,   
+                    ','.join('{:.3f}'.format(x) for x in data)  
+                )  
+                csv_f.write(csv_line)  
+          
+        # 3. Write Footer and update stats  
+        cli.fout.write('{}\n'.format('-' * (72 + max_len)))  
+        last_stats = current_stats  
+  
+def _monitor_tcs(cli, *tcs):  
+    """Monitor traffic class statistics."""  
+    GUTTER_WIDTH = 5  
+    FIELDS = ('CPU MHz', 'scheduled', 'Mpps', 'Mbps', 'pkts/sched', 'cycles/p')  
+      
+    # Get TC information
+    all_tcs = cli.bess.list_tcs().classes_status  
+    wids = {}  
+    max_len = 0  
+      
+    for tc in all_tcs:  
+        class_ = getattr(tc, 'class')  
+        max_len = max(len(class_.name), max_len)  
+        wids[class_.name] = class_.wid  
+    max_len += GUTTER_WIDTH  
+      
+    # Determine which TCs to monitor  
+    if not tcs:  
+        tcs =[getattr(tc, 'class').name for tc in all_tcs]  
+        if not tcs:  
+            raise cli.CommandError('No traffic class to monitor')  
+      
+    cli.fout.write('Monitoring traffic classes: {}\n'.format(', '.join(tcs)))  
+      
+    try:  
+        csv_path = os.getenv('CSV', None)  
+        with open(csv_path, 'w') if csv_path is not None else noop() as csv_f:  
+            if csv_f is not None:  
+                csv_f.write('{}\n'.format(','.join(('Timestamp', 'traffic class') + FIELDS)))  
+            _monitor_tc_loop(cli, tcs, wids, max_len, FIELDS, csv_f)  
+    except KeyboardInterrupt:  
         pass
 
 

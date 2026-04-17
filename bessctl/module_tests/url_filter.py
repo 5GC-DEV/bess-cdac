@@ -121,13 +121,6 @@ class BessUrlFilterTest(BessModuleTestCase):
         ]}
         arg = pb_conv.protobuf_to_dict(uf.get_initial_arg())
         cur_config = pb_conv.protobuf_to_dict(uf.get_runtime_config())
-        # import pprint
-        # def pp2(*args):
-        #    for a, b in zip(*[iter(args)] * 2):
-        #        print('{}:'.format(a))
-        #        pprint.pprint(b, indent=4)
-        # pp2('iconf:', iconf, 'arg:', arg,
-        #    '\nmut state:', cur_config, 'expecting:', expect_config)
         assert arg == iconf and cur_config == expect_config
 
 suite = unittest.TestLoader().loadTestsFromTestCase(BessUrlFilterTest)
