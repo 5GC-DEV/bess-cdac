@@ -172,6 +172,18 @@ CommandResponse FlowMeasure::CommandReadStats(
     const std::lock_guard<std::mutex> lock(flag_mutex_);
     cached_current_flag = current_flag_value_;
   }
+  
+  // CRITICAL LOG: Is the controller reading the active table?
+  if (flag_to_read == cached_current_flag) {
+     LOG(WARNING) << "DANGER: CommandReadStats reading ACTIVE table " 
+                  << Flag_Name(flag_to_read) 
+                  << ". This is a race condition!";
+  } else {
+     LOG(INFO) << "CommandReadStats reading inactive table " 
+               << Flag_Name(flag_to_read) 
+               << ". Current active is " << Flag_Name(cached_current_flag);
+  }
+
   VLOG(1) << name() << ": " << (leader_ ? "leader" : "follower")
           << " last saw buffer flag " << Flag_Name(cached_current_flag)
           << ", now reading from " << Flag_Name(flag_to_read);
@@ -202,8 +214,30 @@ CommandResponse FlowMeasure::CommandReadStats(
   void *data = nullptr;
   uint32_t next = 0;
   int32_t ret = 0;
+  int entries_found = 0;
+  // Get current count from DPDK for comparison
+  ssize_t hash_count = rte_hash_count(current_hash);
+  LOG(INFO) << "Starting iteration. Hash count according to DPDK: " << hash_count;
   while (ret = rte_hash_iterate(current_hash, &key, &data, &next), ret >= 0) {
+    entries_found++;
+    // Check for Null Pointer (The most likely crash point)
+    if (key == nullptr) {
+      LOG(ERROR) << "CRASH IMMINENT: rte_hash_iterate returned ret=" << ret 
+                 << " but key is NULL at iteration " << entries_found;
+      continue; 
+    }
+    // Check for Out of Bounds
+    if (static_cast<size_t>(ret) >= current_data->size()) {
+       LOG(ERROR) << "CRASH IMMINENT: Index " << ret 
+                  << " is out of bounds for vector size " << current_data->size();
+       continue;
+    }
+
     const TableKey *table_key = reinterpret_cast<const TableKey *>(key);
+    // Log a few samples to see if data looks sane
+    if (entries_found % 100 == 0) {
+        VLOG(1) << "Iterating... found index " << ret << " FSEID: " << table_key->fseid;
+    }
     const SessionStats &session_stat = current_data->at(ret);
     const std::lock_guard<std::mutex> lock(session_stat.mutex);
     const std::vector<double> lat_percs(arg.latency_percentiles().begin(),
@@ -227,9 +261,11 @@ CommandResponse FlowMeasure::CommandReadStats(
     stat.set_total_bytes(session_stat.byte_count);
     *resp.add_statistics() = stat;
   }
+  LOG(INFO) << "Iteration finished. Processed " << entries_found << " entries.";
 
   if (arg.clear()) {
     VLOG(1) << name() << ": starting hash table clear...";
+    LOG(INFO) << "Clearing table " << Flag_Name(flag_to_read) << " as requested by controller.";
     rte_hash_reset(current_hash);
     // TODO: this is quite slow
     VLOG(1) << name() << ": hash table clear done, clearing table data...";
