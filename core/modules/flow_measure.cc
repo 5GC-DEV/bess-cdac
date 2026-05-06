@@ -143,8 +143,9 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
       continue;
     }
     if (ret < 0 || static_cast<size_t>(ret) >= current_data->size()) {
-      LOG(ERROR) << "Hash index " << ret << " out of bounds (size="
-                << current_data->size() << ") for key " << key.ToString();
+      LOG(ERROR) << "Hash index " << ret
+                 << " out of bounds (size=" << current_data->size()
+                 << ") for key " << key.ToString();
       continue;
     }
     // Update stats.
