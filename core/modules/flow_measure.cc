@@ -210,11 +210,19 @@ CommandResponse FlowMeasure::CommandReadStats(
   int32_t ret = 0;
   while (ret = rte_hash_iterate(current_hash, &key, &data, &next), ret >= 0) {
     const TableKey *table_key = reinterpret_cast<const TableKey *>(key);
-    if (ret < 0 || static_cast<size_t>(ret) >= current_data->size()) {
-      LOG(ERROR) << "Hash index " << ret << " out of bounds during read";
+    // Use lookup to get the correct position index for your data vector
+    int32_t data_idx = rte_hash_lookup(current_hash, key);
+    if (data_idx < 0) {
+      LOG(ERROR) << "Lookup failed during iterate for key "
+                 << table_key->ToString() << ": " << data_idx;
       continue;
     }
-    const SessionStats &session_stat = current_data->at(ret);
+    if (static_cast<size_t>(data_idx) >= current_data->size()) {
+      LOG(ERROR) << "data_idx " << data_idx
+                 << " out of bounds (size=" << current_data->size() << ")";
+      continue;
+    }
+    const SessionStats &session_stat = current_data->at(data_idx);
     const std::lock_guard<std::mutex> lock(session_stat.mutex);
     const std::vector<double> lat_percs(arg.latency_percentiles().begin(),
                                         arg.latency_percentiles().end());
