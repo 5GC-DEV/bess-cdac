@@ -20,6 +20,11 @@ const Commands FlowMeasure::cmds = {
 /*----------------------------------------------------------------------------------*/
 CommandResponse FlowMeasure::Init(const bess::pb::FlowMeasureArg &arg) {
   using AccessMode = bess::metadata::Attribute::AccessMode;
+
+  LOG(INFO) << name() << ": Init() called. leader=" << arg.leader()
+            << ", flag_attr_name=" << arg.flag_attr_name()
+            << ", entries=" << arg.entries();
+
   // Leader module decides which buffer side to use.
   if (arg.leader()) {
     const std::lock_guard<std::mutex> lock(flag_mutex_);
@@ -27,24 +32,44 @@ CommandResponse FlowMeasure::Init(const bess::pb::FlowMeasureArg &arg) {
     buffer_flag_attr_id_ = AddMetadataAttr(
         arg.flag_attr_name(), sizeof(uint64_t), AccessMode::kWrite);
     current_flag_value_ = Flag::FLAG_VALUE_A;
+    LOG(INFO) << name() << ": Initialized as LEADER. Initial flag=FLAG_VALUE_A"
+              << ", buffer_flag_attr_id=" << buffer_flag_attr_id_;
   } else {
     leader_ = false;
     buffer_flag_attr_id_ = AddMetadataAttr(arg.flag_attr_name(),
                                            sizeof(uint64_t), AccessMode::kRead);
+    LOG(INFO) << name() << ": Initialized as FOLLOWER."
+              << " buffer_flag_attr_id=" << buffer_flag_attr_id_;
   }
-  if (buffer_flag_attr_id_ < 0)
+  if (buffer_flag_attr_id_ < 0) {
+    LOG(ERROR) << name() << ": Failed to add flag metadata attr '"
+               << arg.flag_attr_name() << "': " << buffer_flag_attr_id_;
     return CommandFailure(EINVAL, "invalid flag attribute name");
+  }
   ts_attr_id_ =
       AddMetadataAttr("timestamp", sizeof(uint64_t), AccessMode::kRead);
-  if (ts_attr_id_ < 0)
+  if (ts_attr_id_ < 0) {
+    LOG(ERROR) << name()
+               << ": Failed to add 'timestamp' metadata attr: " << ts_attr_id_;
     return CommandFailure(EINVAL, "invalid metadata declaration");
+  }
+  LOG(INFO) << name() << ": ts_attr_id=" << ts_attr_id_;
+
   fseid_attr_id_ =
       AddMetadataAttr("fseid", sizeof(uint64_t), AccessMode::kRead);
-  if (fseid_attr_id_ < 0)
+  if (fseid_attr_id_ < 0) {
+    LOG(ERROR) << name()
+               << ": Failed to add 'fseid' metadata attr: " << fseid_attr_id_;
     return CommandFailure(EINVAL, "invalid metadata declaration");
+  }
+  LOG(INFO) << name() << ": fseid_attr_id=" << fseid_attr_id_;
   pdr_attr_id_ = AddMetadataAttr("pdr_id", sizeof(uint32_t), AccessMode::kRead);
-  if (pdr_attr_id_ < 0)
+  if (pdr_attr_id_ < 0) {
+    LOG(ERROR) << name()
+               << ": Failed to add 'pdr_id' metadata attr: " << pdr_attr_id_;
     return CommandFailure(EINVAL, "invalid metadata declaration");
+  }
+  LOG(INFO) << name() << ": pdr_attr_id=" << pdr_attr_id_;
 
   rte_hash_parameters hash_params = {};
   hash_params.entries = kDefaultNumEntries;
@@ -55,31 +80,51 @@ CommandResponse FlowMeasure::Init(const bess::pb::FlowMeasureArg &arg) {
   if (arg.entries()) {
     hash_params.entries = arg.entries();
   }
+  LOG(INFO) << name() << ": Hash table params: entries=" << hash_params.entries
+            << ", key_len=" << hash_params.key_len
+            << ", socket_id=" << hash_params.socket_id;
   // Create both hash tables.
   std::string name_a = name() + "Ta" + std::to_string(hash_params.socket_id);
+  LOG(INFO) << name() << ": Creating hash table A with name='" << name_a
+            << "' (len=" << name_a.length() << ")";
   if (name_a.length() > 26 /*RTE_HASH_NAMESIZE - 1*/) {
+    LOG(ERROR) << name() << ": Hash table A name too long: " << name_a;
     return CommandFailure(EINVAL, "invalid hash name A");
   }
   hash_params.name = name_a.c_str();
   table_a_ = rte_hash_create(&hash_params);
   if (!table_a_) {
+    LOG(ERROR) << name() << ": rte_hash_create failed for table A"
+               << ": rte_errno=" << rte_errno << " (" << rte_strerror(rte_errno)
+               << ")";
     return CommandFailure(rte_errno, "could not create hashmap A");
   }
+  LOG(INFO) << name() << ": Hash table A created successfully.";
   std::string name_b = name() + "Tb" + std::to_string(hash_params.socket_id);
+  LOG(INFO) << name() << ": Creating hash table B with name='" << name_b
+            << "' (len=" << name_b.length() << ")";
   if (name_b.length() > 26 /*RTE_HASH_NAMESIZE - 1*/) {
+    LOG(ERROR) << name() << ": Hash table B name too long: " << name_b;
     return CommandFailure(EINVAL, "invalid hash name B");
   }
   hash_params.name = name_b.c_str();
   table_b_ = rte_hash_create(&hash_params);
   if (!table_b_) {
+    LOG(ERROR) << name() << ": rte_hash_create failed for table B"
+               << ": rte_errno=" << rte_errno << " (" << rte_strerror(rte_errno)
+               << ")";
     return CommandFailure(rte_errno, "could not create hashmap B");
   }
+  LOG(INFO) << name() << ": Hash table B created successfully.";
 
   // resize() would require a copyable object.
   std::vector<SessionStats> tmp_a(hash_params.entries);
   std::vector<SessionStats> tmp_b(hash_params.entries);
   table_data_a_.swap(tmp_a);
   table_data_b_.swap(tmp_b);
+  LOG(INFO) << name() << ": Data vectors allocated: table_data_a_.size()="
+            << table_data_a_.size()
+            << ", table_data_b_.size()=" << table_data_b_.size();
   VLOG(1) << name() << ": Tables created successfully.";
 
   return CommandSuccess();
@@ -108,6 +153,11 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
     }
 
     uint64_t ts_ns = get_attr<uint64_t>(this, ts_attr_id_, batch->pkts()[i]);
+    // Guard against unset/garbage timestamp metadata
+    if (ts_ns == 0 || ts_ns > now_ns || (now_ns - ts_ns) > 10ULL * 1e9) {
+      // Skip packets with clearly invalid timestamps (>10s latency = garbage)
+      continue;
+    }
     uint64_t fseid = get_attr<uint64_t>(this, fseid_attr_id_, batch->pkts()[i]);
     uint32_t pdr = get_attr<uint32_t>(this, pdr_attr_id_, batch->pkts()[i]);
     // Discard invalid timestamps.
@@ -168,8 +218,16 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
 /*----------------------------------------------------------------------------------*/
 CommandResponse FlowMeasure::CommandReadStats(
     const bess::pb::FlowMeasureCommandReadArg &arg) {
+  LOG(INFO) << name() << ": CommandReadStats() called."
+            << " flag_to_read=" << arg.flag_to_read()
+            << " clear=" << arg.clear() << " latency_percentiles=["
+            << arg.latency_percentiles().size() << " vals]"
+            << " jitter_percentiles=[" << arg.jitter_percentiles().size()
+            << " vals]";
   Flag flag_to_read = static_cast<Flag>(arg.flag_to_read());
   if (!Flag_IsValid(flag_to_read)) {
+    LOG(ERROR) << name() << ": CommandReadStats: invalid flag_to_read value: "
+               << arg.flag_to_read();
     return CommandFailure(EINVAL, "invalid flag value");
   }
   // Cache current flag so we don't block the dataplane while reading the stats.
@@ -223,6 +281,9 @@ CommandResponse FlowMeasure::CommandReadStats(
       continue;
     }
     const SessionStats &session_stat = current_data->at(data_idx);
+    if (session_stat.pkt_count == 0) {
+      continue;  // Skip entries with no valid packets
+    }
     const std::lock_guard<std::mutex> lock(session_stat.mutex);
     const std::vector<double> lat_percs(arg.latency_percentiles().begin(),
                                         arg.latency_percentiles().end());
