@@ -39,6 +39,8 @@ class FlowMeasure final : public Module {
       const bess::pb::FlowMeasureCommandFlipArg &arg);
 
  private:
+  std::atomic<bool> clear_in_progress_a_{false};
+  std::atomic<bool> clear_in_progress_b_{false};
   // Flag represents a collection of possible values to select buffer sides.
   enum class Flag {
     FLAG_VALUE_INVALID = 0,

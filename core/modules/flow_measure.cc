@@ -234,9 +234,13 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
     int32_t ret = rte_hash_lookup(current_hash, &key);
     if (ret == -ENOENT) {
       ret = rte_hash_add_key(current_hash, &key);
-      VLOG(1) << name() << ": new session"
-              << " fseid=" << fseid << " pdr=" << pdr
-              << " assigned index=" << ret;
+      if (ret >= 0 && static_cast<size_t>(ret) < current_data->size()) {
+        SessionStats &s = current_data->at(ret);
+        const std::lock_guard<std::mutex> lock(s.mutex);
+        s.reset();  // <-- ADD THIS: zero out before first use
+      }
+      VLOG(1) << name() << ": new session fseid=" << fseid
+              << " pdr=" << pdr << " idx=" << ret;
     }
     if (ret < 0) {
       LOG_EVERY_N(ERROR, 1'001)
@@ -450,23 +454,37 @@ CommandResponse FlowMeasure::CommandReadStats(
             << " skipped_empty=" << entries_skipped_empty;
 
   if (arg.clear()) {
-    LOG(INFO) << name() << ": clearing hash table and data vector...";
+    LOG(INFO) << name() << ": clearing via per-key deletion (RW_CONCURRENCY safe)...";
 
-    // Reset the hash table — this frees all keys. ProcessBatch will re-insert
-    // them as new packets arrive. The 10 ms sleep in CommandFlipFlag is meant
-    // to drain in-flight packets before we get here; if clear is called without
-    // a preceding flip, concurrent ProcessBatch inserts may race with the reset.
-    rte_hash_reset(current_hash);
-    LOG(INFO) << name() << ": hash table reset done.";
+    // Collect all keys first (we already iterated above, but we need a second
+    // pass — iterate again on the same hash since rte_hash_reset is not safe).
+    std::vector<TableKey> keys_to_delete;
+    keys_to_delete.reserve(entries_exported + entries_skipped_empty + 8);
 
-    // Zero out the backing data vector under each entry's mutex.
-    for (size_t idx = 0; idx < current_data->size(); ++idx) {
-      SessionStats &s = current_data->at(idx);
-      const std::lock_guard<std::mutex> lock(s.mutex);
-      s.reset();
+    const void *del_key = nullptr;
+    void       *del_data = nullptr;
+    uint32_t    del_next = 0;
+    int32_t     del_ret  = 0;
+    while (del_ret = rte_hash_iterate(current_hash, &del_key, &del_data, &del_next),
+          del_ret >= 0) {
+      if (del_key) {
+        keys_to_delete.push_back(*reinterpret_cast<const TableKey *>(del_key));
+      }
     }
-    LOG(INFO) << name() << ": data vector cleared.";
-  }
+
+    // Delete each key individually — this is safe under RW_CONCURRENCY.
+    for (const auto &k : keys_to_delete) {
+      int32_t pos = rte_hash_del_key(current_hash, &k);
+      if (pos >= 0 && static_cast<size_t>(pos) < current_data->size()) {
+        SessionStats &s = current_data->at(pos);
+        const std::lock_guard<std::mutex> lock(s.mutex);
+        s.reset();
+      }
+    }
+
+    LOG(INFO) << name() << ": per-key clear done, deleted "
+              << keys_to_delete.size() << " entries.";
+}
 
   auto t_done = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> elapsed = t_done - t_start;
