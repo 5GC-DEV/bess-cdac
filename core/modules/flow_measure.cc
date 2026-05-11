@@ -86,7 +86,7 @@ CommandResponse FlowMeasure::Init(const bess::pb::FlowMeasureArg &arg) {
   // mode, ProcessBatch (worker) and CommandReadStats (gRPC/control thread) run
   // truly concurrently. We rely on per-entry SessionStats::mutex to protect
   // individual stat fields, and defensive bounds checking to guard the index.
-  hash_params.extra_flag = RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY;
+  hash_params.extra_flag = RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY_LF;
 
   if (arg.entries()) {
     hash_params.entries = arg.entries();
@@ -445,18 +445,34 @@ CommandResponse FlowMeasure::CommandReadStats(
             << " skipped_empty=" << entries_skipped_empty;
 
   if (arg.clear()) {
-    LOG(INFO) << name()
-              << ": clearing via per-key deletion (RW_CONCURRENCY safe)...";
+    // SAFETY: we only clear the buffer that is NOT currently active
+    // (i.e. ProcessBatch is writing to the OTHER table right now).
+    // rte_hash_del_key is safe here because the worker is not touching
+    // this table. The flag was flipped by CommandFlipFlag before this call.
+    LOG(INFO) << name() << ": clearing inactive buffer via per-key deletion...";
 
-    // Collect all keys first (we already iterated above, but we need a second
-    // pass — iterate again on the same hash since rte_hash_reset is not safe).
+    // Re-snapshot the active flag to double-check we're clearing the right side
+    Flag current_active;
+    {
+      const std::lock_guard<std::mutex> lock(flag_mutex_);
+      current_active = current_flag_value_;
+    }
+    if (current_active == flag_to_read &&
+        flag_to_read != Flag::FLAG_VALUE_INVALID) {
+      LOG(ERROR)
+          << name()
+          << ": REFUSING to clear — flag_to_read=" << Flag_Name(flag_to_read)
+          << " matches active buffer. CommandFlipFlag was not called first!";
+      return CommandFailure(EINVAL, "cannot clear the active buffer");
+    }
+
     std::vector<TableKey> keys_to_delete;
-    keys_to_delete.reserve(entries_exported + entries_skipped_empty + 8);
-
+    keys_to_delete.reserve(64);
     const void *del_key = nullptr;
     void *del_data = nullptr;
     uint32_t del_next = 0;
     int32_t del_ret = 0;
+
     while (del_ret =
                rte_hash_iterate(current_hash, &del_key, &del_data, &del_next),
            del_ret >= 0) {
@@ -465,7 +481,6 @@ CommandResponse FlowMeasure::CommandReadStats(
       }
     }
 
-    // Delete each key individually — this is safe under RW_CONCURRENCY.
     for (const auto &k : keys_to_delete) {
       int32_t pos = rte_hash_del_key(current_hash, &k);
       if (pos >= 0 && static_cast<size_t>(pos) < current_data->size()) {
@@ -475,8 +490,8 @@ CommandResponse FlowMeasure::CommandReadStats(
       }
     }
 
-    LOG(INFO) << name() << ": per-key clear done, deleted "
-              << keys_to_delete.size() << " entries.";
+    LOG(INFO) << name() << ": clear done, deleted " << keys_to_delete.size()
+              << " entries.";
   }
 
   auto t_done = std::chrono::high_resolution_clock::now();
