@@ -46,8 +46,7 @@ CommandResponse FlowMeasure::Init(const bess::pb::FlowMeasureArg &arg) {
 
   if (buffer_flag_attr_id_ < 0) {
     LOG(ERROR) << name() << ": failed to add flag metadata attr '"
-               << arg.flag_attr_name()
-               << "': id=" << buffer_flag_attr_id_;
+               << arg.flag_attr_name() << "': id=" << buffer_flag_attr_id_;
     return CommandFailure(EINVAL, "invalid flag attribute name");
   }
 
@@ -69,8 +68,7 @@ CommandResponse FlowMeasure::Init(const bess::pb::FlowMeasureArg &arg) {
   }
   LOG(INFO) << name() << ": fseid_attr_id=" << fseid_attr_id_;
 
-  pdr_attr_id_ =
-      AddMetadataAttr("pdr_id", sizeof(uint32_t), AccessMode::kRead);
+  pdr_attr_id_ = AddMetadataAttr("pdr_id", sizeof(uint32_t), AccessMode::kRead);
   if (pdr_attr_id_ < 0) {
     LOG(ERROR) << name() << ": failed to add 'pdr_id' metadata attr:"
                << " id=" << pdr_attr_id_;
@@ -112,8 +110,8 @@ CommandResponse FlowMeasure::Init(const bess::pb::FlowMeasureArg &arg) {
   table_a_ = rte_hash_create(&hash_params);
   if (!table_a_) {
     LOG(ERROR) << name() << ": rte_hash_create failed for table A"
-               << " rte_errno=" << rte_errno
-               << " (" << rte_strerror(rte_errno) << ")";
+               << " rte_errno=" << rte_errno << " (" << rte_strerror(rte_errno)
+               << ")";
     return CommandFailure(rte_errno, "could not create hashmap A");
   }
   LOG(INFO) << name() << ": hash table A created successfully.";
@@ -131,8 +129,8 @@ CommandResponse FlowMeasure::Init(const bess::pb::FlowMeasureArg &arg) {
   table_b_ = rte_hash_create(&hash_params);
   if (!table_b_) {
     LOG(ERROR) << name() << ": rte_hash_create failed for table B"
-               << " rte_errno=" << rte_errno
-               << " (" << rte_strerror(rte_errno) << ")";
+               << " rte_errno=" << rte_errno << " (" << rte_strerror(rte_errno)
+               << ")";
     return CommandFailure(rte_errno, "could not create hashmap B");
   }
   LOG(INFO) << name() << ": hash table B created successfully.";
@@ -173,20 +171,17 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
           get_attr<uint64_t>(this, buffer_flag_attr_id_, batch->pkts()[i]);
       if (!Flag_IsValid(flag)) {
         LOG_EVERY_N(WARNING, 100'001)
-            << name() << ": encountered invalid flag=" << flag
-            << " in packet " << i << " — skipping.";
+            << name() << ": encountered invalid flag=" << flag << " in packet "
+            << i << " — skipping.";
         continue;
       }
       current_flag_value_ = static_cast<Flag>(flag);
       cached_current_flag = current_flag_value_;
     }
 
-    uint64_t ts_ns =
-        get_attr<uint64_t>(this, ts_attr_id_, batch->pkts()[i]);
-    uint64_t fseid =
-        get_attr<uint64_t>(this, fseid_attr_id_, batch->pkts()[i]);
-    uint32_t pdr =
-        get_attr<uint32_t>(this, pdr_attr_id_, batch->pkts()[i]);
+    uint64_t ts_ns = get_attr<uint64_t>(this, ts_attr_id_, batch->pkts()[i]);
+    uint64_t fseid = get_attr<uint64_t>(this, fseid_attr_id_, batch->pkts()[i]);
+    uint32_t pdr = get_attr<uint32_t>(this, pdr_attr_id_, batch->pkts()[i]);
 
     // Guard against unset (zero) or future timestamps, and absurdly large
     // latency values (> 10 s almost certainly means the metadata was never
@@ -205,8 +200,8 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
     }
     if ((now_ns - ts_ns) > 10ULL * 1'000'000'000ULL) {
       LOG_EVERY_N(WARNING, 100'001)
-          << name() << ": pkt[" << i << "] latency="
-          << (now_ns - ts_ns) << " ns > 10 s — garbage timestamp, skipping.";
+          << name() << ": pkt[" << i << "] latency=" << (now_ns - ts_ns)
+          << " ns > 10 s — garbage timestamp, skipping.";
       continue;
     }
 
@@ -224,8 +219,9 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
         break;
       default:
         LOG_EVERY_N(ERROR, 100'001)
-            << name() << ": unknown flag value="
-            << Flag_Name(cached_current_flag) << " — skipping packet.";
+            << name()
+            << ": unknown flag value=" << Flag_Name(cached_current_flag)
+            << " — skipping packet.";
         continue;
     }
 
@@ -239,14 +235,14 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
         const std::lock_guard<std::mutex> lock(s.mutex);
         s.reset();  // <-- ADD THIS: zero out before first use
       }
-      VLOG(1) << name() << ": new session fseid=" << fseid
-              << " pdr=" << pdr << " idx=" << ret;
+      VLOG(1) << name() << ": new session fseid=" << fseid << " pdr=" << pdr
+              << " idx=" << ret;
     }
     if (ret < 0) {
       LOG_EVERY_N(ERROR, 1'001)
           << name() << ": failed to lookup/insert session"
-          << " fseid=" << fseid << " pdr=" << pdr
-          << " ret=" << ret << " (" << rte_strerror(-ret) << ").";
+          << " fseid=" << fseid << " pdr=" << pdr << " ret=" << ret << " ("
+          << rte_strerror(-ret) << ").";
       continue;
     }
     if (static_cast<size_t>(ret) >= current_data->size()) {
@@ -275,10 +271,8 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
     stat.byte_count += batch->pkts()[i]->total_len();
 
     VLOG(2) << name() << ": updated stats"
-            << " fseid=" << fseid << " pdr=" << pdr
-            << " idx=" << ret
-            << " diff_ns=" << diff_ns
-            << " jitter_ns=" << jitter_ns
+            << " fseid=" << fseid << " pdr=" << pdr << " idx=" << ret
+            << " diff_ns=" << diff_ns << " jitter_ns=" << jitter_ns
             << " pkt_count=" << stat.pkt_count
             << " byte_count=" << stat.byte_count;
   }
@@ -289,7 +283,6 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
 /*----------------------------------------------------------------------------------*/
 CommandResponse FlowMeasure::CommandReadStats(
     const bess::pb::FlowMeasureCommandReadArg &arg) {
-
   LOG(INFO) << name() << ": CommandReadStats() called."
             << " flag_to_read=" << arg.flag_to_read()
             << " clear=" << arg.clear()
@@ -349,8 +342,8 @@ CommandResponse FlowMeasure::CommandReadStats(
       LOG(INFO) << name() << ": reading from table B.";
       break;
     default:
-      LOG(ERROR) << name() << ": unhandled flag value="
-                 << Flag_Name(flag_to_read);
+      LOG(ERROR) << name()
+                 << ": unhandled flag value=" << Flag_Name(flag_to_read);
       return CommandFailure(EINVAL, "invalid flag value");
   }
 
@@ -406,16 +399,14 @@ CommandResponse FlowMeasure::CommandReadStats(
     // --- Guard 3: skip entries that have never been written to ---
     if (session_stat.pkt_count == 0) {
       VLOG(1) << name() << ": skipping empty entry"
-              << " idx=" << ret
-              << " fseid=" << table_key->fseid
+              << " idx=" << ret << " fseid=" << table_key->fseid
               << " pdr=" << table_key->pdr;
       ++entries_skipped_empty;
       continue;
     }
 
     VLOG(1) << name() << ": exporting stats"
-            << " idx=" << ret
-            << " fseid=" << table_key->fseid
+            << " idx=" << ret << " fseid=" << table_key->fseid
             << " pdr=" << table_key->pdr
             << " pkt_count=" << session_stat.pkt_count
             << " byte_count=" << session_stat.byte_count;
@@ -454,7 +445,8 @@ CommandResponse FlowMeasure::CommandReadStats(
             << " skipped_empty=" << entries_skipped_empty;
 
   if (arg.clear()) {
-    LOG(INFO) << name() << ": clearing via per-key deletion (RW_CONCURRENCY safe)...";
+    LOG(INFO) << name()
+              << ": clearing via per-key deletion (RW_CONCURRENCY safe)...";
 
     // Collect all keys first (we already iterated above, but we need a second
     // pass — iterate again on the same hash since rte_hash_reset is not safe).
@@ -462,11 +454,12 @@ CommandResponse FlowMeasure::CommandReadStats(
     keys_to_delete.reserve(entries_exported + entries_skipped_empty + 8);
 
     const void *del_key = nullptr;
-    void       *del_data = nullptr;
-    uint32_t    del_next = 0;
-    int32_t     del_ret  = 0;
-    while (del_ret = rte_hash_iterate(current_hash, &del_key, &del_data, &del_next),
-          del_ret >= 0) {
+    void *del_data = nullptr;
+    uint32_t del_next = 0;
+    int32_t del_ret = 0;
+    while (del_ret =
+               rte_hash_iterate(current_hash, &del_key, &del_data, &del_next),
+           del_ret >= 0) {
       if (del_key) {
         keys_to_delete.push_back(*reinterpret_cast<const TableKey *>(del_key));
       }
@@ -484,12 +477,12 @@ CommandResponse FlowMeasure::CommandReadStats(
 
     LOG(INFO) << name() << ": per-key clear done, deleted "
               << keys_to_delete.size() << " entries.";
-}
+  }
 
   auto t_done = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> elapsed = t_done - t_start;
-  LOG(INFO) << name() << ": CommandReadStats() done in "
-            << elapsed.count() << " s"
+  LOG(INFO) << name() << ": CommandReadStats() done in " << elapsed.count()
+            << " s"
             << " stats_returned=" << resp.statistics_size();
 
   return CommandSuccess(resp);
@@ -498,7 +491,6 @@ CommandResponse FlowMeasure::CommandReadStats(
 /*----------------------------------------------------------------------------------*/
 CommandResponse FlowMeasure::CommandFlipFlag(
     const bess::pb::FlowMeasureCommandFlipArg &) {
-
   if (!leader_) {
     LOG(ERROR) << name() << ": CommandFlipFlag called on non-leader module.";
     return CommandFailure(EINVAL, "only leaders can flip the flag");
