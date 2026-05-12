@@ -5,11 +5,6 @@
 #ifndef BESS_MODULES_QOS_MEASURE_H_
 #define BESS_MODULES_QOS_MEASURE_H_
 
-// NOTE: rte_hash intentionally removed — rte_hash_iterate is not safe when
-// rte_hash_add_key runs concurrently even with
-// RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY. Replaced with std::unordered_map +
-// std::shared_mutex.
-
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -31,7 +26,6 @@ class FlowMeasure final : public Module {
         fseid_attr_id_(-1),
         pdr_attr_id_(-1),
         buffer_flag_attr_id_(-1) {
-    // Single worker only — double-buffer design serialises per-buffer writes.
     max_allowed_workers_ = 1;
   }
 
@@ -48,9 +42,6 @@ class FlowMeasure final : public Module {
       const bess::pb::FlowMeasureCommandFlipArg &arg);
 
  private:
-  // -----------------------------------------------------------------------
-  // Flag — selects which double-buffer is active.
-  // -----------------------------------------------------------------------
   enum class Flag {
     FLAG_VALUE_INVALID = 0,
     FLAG_VALUE_A = 1,
@@ -77,9 +68,6 @@ class FlowMeasure final : public Module {
     }
   }
 
-  // -----------------------------------------------------------------------
-  // TableKey — same layout as original, kept identical so no behaviour change.
-  // -----------------------------------------------------------------------
   struct __attribute__((packed, aligned(16))) TableKey {
     uint64_t fseid;
     uint64_t pdr;
@@ -101,7 +89,6 @@ class FlowMeasure final : public Module {
   static_assert(std::is_trivially_copyable<TableKey>::value,
                 "TableKey must be trivially copyable.");
 
-  // Hash for TableKey — replaces rte_jhash, same mixing quality.
   struct TableKeyHash {
     std::size_t operator()(const TableKey &k) const noexcept {
       std::size_t h = k.fseid;
@@ -115,9 +102,6 @@ class FlowMeasure final : public Module {
     }
   };
 
-  // -----------------------------------------------------------------------
-  // SessionStats — identical to original.
-  // -----------------------------------------------------------------------
   struct SessionStats {
     uint64_t pkt_count;
     uint64_t byte_count;
@@ -137,14 +121,12 @@ class FlowMeasure final : public Module {
           latency_histogram(kNumBuckets, kBucketWidthNs),
           jitter_histogram(kNumBuckets, kBucketWidthNs) {}
 
-    // mutex is not movable — must live on heap, accessed via pointer.
     SessionStats(const SessionStats &) = delete;
     SessionStats &operator=(const SessionStats &) = delete;
     SessionStats(SessionStats &&) = delete;
     SessionStats &operator=(SessionStats &&) = delete;
 
     void reset() {
-      // Caller must hold mutex.
       pkt_count = 0;
       byte_count = 0;
       last_latency = 0;
@@ -153,19 +135,10 @@ class FlowMeasure final : public Module {
     }
   };
 
-  // -----------------------------------------------------------------------
-  // Buffer — one side of the double-buffer.
-  //
-  // Replaces: rte_hash* + std::vector<SessionStats>
-  //
-  // Concurrency model:
-  //   ProcessBatch  : shared_lock for existing-entry lookup,
-  //                   unique_lock briefly for new-entry insertion.
-  //   CommandReadStats : shared_lock for full iteration
-  //                      (safe because ProcessBatch is on the OTHER buffer
-  //                       after CommandFlipFlag is called).
-  //   clear()       : unique_lock; only ever called on the inactive buffer.
-  // -----------------------------------------------------------------------
+  // One side of the double-buffer.
+  // Replaces rte_hash* + std::vector<SessionStats>.
+  // std::shared_mutex allows concurrent ProcessBatch lookups (shared_lock)
+  // while serialising new-entry insertion and clear (unique_lock).
   struct Buffer {
     mutable std::shared_mutex map_mutex;
     std::unordered_map<TableKey, SessionStats *, TableKeyHash> map;
@@ -176,7 +149,6 @@ class FlowMeasure final : public Module {
     Buffer(const Buffer &) = delete;
     Buffer &operator=(const Buffer &) = delete;
 
-    // Free all heap-allocated SessionStats and empty the map.
     void clear() {
       std::unique_lock<std::shared_mutex> lk(map_mutex);
       for (auto &kv : map)
@@ -184,19 +156,14 @@ class FlowMeasure final : public Module {
       map.clear();
     }
 
-    // Return existing SessionStats or create a new one — thread-safe.
     SessionStats *get_or_create(const TableKey &key) {
-      // Fast path: shared lock, entry likely exists.
       {
         std::shared_lock<std::shared_mutex> lk(map_mutex);
         auto it = map.find(key);
         if (it != map.end())
           return it->second;
       }
-      // Slow path: exclusive lock, insert new entry.
       std::unique_lock<std::shared_mutex> lk(map_mutex);
-      // Re-check after acquiring exclusive lock (another thread may have
-      // inserted between the two lock acquisitions).
       auto [it, inserted] = map.emplace(key, nullptr);
       if (inserted)
         it->second = new SessionStats();
@@ -204,13 +171,10 @@ class FlowMeasure final : public Module {
     }
   };
 
-  // -----------------------------------------------------------------------
-  // Data members
-  // -----------------------------------------------------------------------
-
-  // Double-buffers: replaces table_a_/table_b_ + table_data_a_/table_data_b_.
-  bool               leader_;
-  Flag               current_flag_value_;   // protected by flag_mutex_
+  // Members declared in constructor-initializer order to satisfy
+  // -Werror=reorder.
+  bool leader_;
+  Flag current_flag_value_;
   mutable std::mutex flag_mutex_;
 
   std::unique_ptr<Buffer> buf_a_;
