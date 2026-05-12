@@ -209,17 +209,17 @@ class FlowMeasure final : public Module {
   // -----------------------------------------------------------------------
 
   // Double-buffers: replaces table_a_/table_b_ + table_data_a_/table_data_b_.
+  bool               leader_;
+  Flag               current_flag_value_;   // protected by flag_mutex_
+  mutable std::mutex flag_mutex_;
+
   std::unique_ptr<Buffer> buf_a_;
   std::unique_ptr<Buffer> buf_b_;
 
-  mutable std::mutex flag_mutex_;  // protects current_flag_value_
-  Flag current_flag_value_;
-  bool leader_;
-
-  int buffer_flag_attr_id_;
   int ts_attr_id_;
   int fseid_attr_id_;
   int pdr_attr_id_;
+  int buffer_flag_attr_id_;
 };
 
 #endif  // BESS_MODULES_QOS_MEASURE_H_
