@@ -5,9 +5,10 @@
  * FIX SUMMARY
  * -----------
  * Root cause: rte_hash_iterate() is NOT safe when rte_hash_add_key() runs
- * concurrently on the same table, even with RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY.
- * DPDK's internal bucket walk in rte_hash_iterate dereferences pointers that
- * rte_hash_add_key may be reshuffling simultaneously → SIGSEGV at address 0.
+ * concurrently on the same table, even with
+ * RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY. DPDK's internal bucket walk in
+ * rte_hash_iterate dereferences pointers that rte_hash_add_key may be
+ * reshuffling simultaneously → SIGSEGV at address 0.
  *
  * Fix: replaced rte_hash + rte_hash_iterate with std::unordered_map protected
  * by std::shared_mutex.  The double-buffer (flag-flip) design is preserved
@@ -26,7 +27,8 @@
 
 // Build-stamp: grep for this string in `strings /bin/bessd` to confirm
 // that this version compiled into the binary.
-static const char *kBuildStamp = "[v2-FIXED] flow_measure built " __DATE__ " " __TIME__;
+static const char *kBuildStamp =
+    "[v2-FIXED] flow_measure built " __DATE__ " " __TIME__;
 
 /*----------------------------------------------------------------------------------*/
 const Commands FlowMeasure::cmds = {
@@ -44,8 +46,7 @@ CommandResponse FlowMeasure::Init(const bess::pb::FlowMeasureArg &arg) {
   // If you see "[v2-FIXED]" here — the fix is compiled in.
   // If you still see the old logs without this prefix — old binary is running.
   LOG(INFO) << name() << ": [v2-FIXED] Init() called."
-            << " BUILD=" << kBuildStamp
-            << " leader=" << arg.leader()
+            << " BUILD=" << kBuildStamp << " leader=" << arg.leader()
             << " flag_attr_name=" << arg.flag_attr_name()
             << " entries=" << arg.entries();
 
@@ -60,8 +61,8 @@ CommandResponse FlowMeasure::Init(const bess::pb::FlowMeasureArg &arg) {
               << " buffer_flag_attr_id=" << buffer_flag_attr_id_;
   } else {
     leader_ = false;
-    buffer_flag_attr_id_ = AddMetadataAttr(
-        arg.flag_attr_name(), sizeof(uint64_t), AccessMode::kRead);
+    buffer_flag_attr_id_ = AddMetadataAttr(arg.flag_attr_name(),
+                                           sizeof(uint64_t), AccessMode::kRead);
     // Followers read the flag from packet metadata in ProcessBatch.
     // Start INVALID — ProcessBatch sets it on first packet.
     current_flag_value_ = Flag::FLAG_VALUE_INVALID;
@@ -75,18 +76,17 @@ CommandResponse FlowMeasure::Init(const bess::pb::FlowMeasureArg &arg) {
     return CommandFailure(EINVAL, "invalid flag attribute name");
   }
 
-  ts_attr_id_ = AddMetadataAttr("timestamp", sizeof(uint64_t),
-                                AccessMode::kRead);
+  ts_attr_id_ =
+      AddMetadataAttr("timestamp", sizeof(uint64_t), AccessMode::kRead);
   if (ts_attr_id_ < 0)
     return CommandFailure(EINVAL, "invalid metadata declaration");
 
-  fseid_attr_id_ = AddMetadataAttr("fseid", sizeof(uint64_t),
-                                   AccessMode::kRead);
+  fseid_attr_id_ =
+      AddMetadataAttr("fseid", sizeof(uint64_t), AccessMode::kRead);
   if (fseid_attr_id_ < 0)
     return CommandFailure(EINVAL, "invalid metadata declaration");
 
-  pdr_attr_id_ = AddMetadataAttr("pdr_id", sizeof(uint32_t),
-                                 AccessMode::kRead);
+  pdr_attr_id_ = AddMetadataAttr("pdr_id", sizeof(uint32_t), AccessMode::kRead);
   if (pdr_attr_id_ < 0)
     return CommandFailure(EINVAL, "invalid metadata declaration");
 
@@ -97,8 +97,7 @@ CommandResponse FlowMeasure::Init(const bess::pb::FlowMeasureArg &arg) {
   buf_b_ = std::make_unique<Buffer>();
 
   LOG(INFO) << name() << ": [v2-FIXED] Init() complete."
-            << " buf_a=" << buf_a_.get()
-            << " buf_b=" << buf_b_.get()
+            << " buf_a=" << buf_a_.get() << " buf_b=" << buf_b_.get()
             << " (std::unordered_map, NO rte_hash)";
 
   return CommandSuccess();
@@ -129,11 +128,12 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
       cached_current_flag = current_flag_value_;
     }
 
-    uint64_t ts_ns = get_attr<uint64_t>(this, ts_attr_id_,    batch->pkts()[i]);
+    uint64_t ts_ns = get_attr<uint64_t>(this, ts_attr_id_, batch->pkts()[i]);
     uint64_t fseid = get_attr<uint64_t>(this, fseid_attr_id_, batch->pkts()[i]);
-    uint32_t pdr   = get_attr<uint32_t>(this, pdr_attr_id_,   batch->pkts()[i]);
+    uint32_t pdr = get_attr<uint32_t>(this, pdr_attr_id_, batch->pkts()[i]);
 
-    if (!ts_ns || now_ns < ts_ns) continue;
+    if (!ts_ns || now_ns < ts_ns)
+      continue;
 
     // Select the active buffer.
     // FIX: buf->get_or_create() uses shared_lock for lookup and unique_lock
@@ -141,12 +141,16 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
     // with CommandReadStats iterating the OTHER buffer.
     Buffer *buf = nullptr;
     switch (cached_current_flag) {
-      case Flag::FLAG_VALUE_A: buf = buf_a_.get(); break;
-      case Flag::FLAG_VALUE_B: buf = buf_b_.get(); break;
+      case Flag::FLAG_VALUE_A:
+        buf = buf_a_.get();
+        break;
+      case Flag::FLAG_VALUE_B:
+        buf = buf_b_.get();
+        break;
       default:
         LOG_EVERY_N(ERROR, 100'001)
-            << name() << ": [v2-FIXED] unknown flag="
-            << Flag_Name(cached_current_flag);
+            << name()
+            << ": [v2-FIXED] unknown flag=" << Flag_Name(cached_current_flag);
         continue;
     }
 
@@ -155,12 +159,13 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
 
     const std::lock_guard<std::mutex> lock(stat->mutex);
     uint64_t diff_ns = now_ns - ts_ns;
-    if (stat->last_latency == 0) stat->last_latency = diff_ns;
+    if (stat->last_latency == 0)
+      stat->last_latency = diff_ns;
     uint64_t jitter_ns = absdiff(stat->last_latency, diff_ns);
     stat->last_latency = diff_ns;
     stat->latency_histogram.Insert(diff_ns);
     stat->jitter_histogram.Insert(jitter_ns);
-    stat->pkt_count  += 1;
+    stat->pkt_count += 1;
     stat->byte_count += batch->pkts()[i]->total_len();
   }
 
@@ -170,15 +175,13 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
 /*----------------------------------------------------------------------------------*/
 CommandResponse FlowMeasure::CommandReadStats(
     const bess::pb::FlowMeasureCommandReadArg &arg) {
-
   Flag flag_to_read = static_cast<Flag>(arg.flag_to_read());
 
   // FIX: FLAG_VALUE_INVALID is valid here — means no traffic yet.
   // Original code returned CommandFailure for INVALID; we return empty stats.
-  if (!Flag_IsValid(flag_to_read) &&
-      flag_to_read != Flag::FLAG_VALUE_INVALID) {
-    LOG(ERROR) << name() << ": [v2-FIXED] invalid flag_to_read="
-               << arg.flag_to_read();
+  if (!Flag_IsValid(flag_to_read) && flag_to_read != Flag::FLAG_VALUE_INVALID) {
+    LOG(ERROR) << name()
+               << ": [v2-FIXED] invalid flag_to_read=" << arg.flag_to_read();
     return CommandFailure(EINVAL, "invalid flag value");
   }
 
@@ -189,8 +192,8 @@ CommandResponse FlowMeasure::CommandReadStats(
   }
 
   LOG(INFO) << name() << ": [v2-FIXED] CommandReadStats() called."
-            << " flag_to_read=" << arg.flag_to_read()
-            << " (" << Flag_Name(flag_to_read) << ")"
+            << " flag_to_read=" << arg.flag_to_read() << " ("
+            << Flag_Name(flag_to_read) << ")"
             << " clear=" << arg.clear()
             << " active_buffer=" << Flag_Name(cached_current_flag)
             << " role=" << (leader_ ? "leader" : "follower");
@@ -222,7 +225,8 @@ CommandResponse FlowMeasure::CommandReadStats(
   }
 
   if (!buf) {
-    LOG(ERROR) << name() << ": [v2-FIXED] buffer ptr is null — Init() not called?";
+    LOG(ERROR) << name()
+               << ": [v2-FIXED] buffer ptr is null — Init() not called?";
     return CommandFailure(EINVAL, "buffer not initialized");
   }
 
@@ -252,8 +256,8 @@ CommandResponse FlowMeasure::CommandReadStats(
 
       if (!stat_ptr) {
         LOG_EVERY_N(WARNING, 101)
-            << name() << ": [v2-FIXED] null stat_ptr for key="
-            << key.ToString() << " skipping.";
+            << name() << ": [v2-FIXED] null stat_ptr for key=" << key.ToString()
+            << " skipping.";
         continue;
       }
 
@@ -269,8 +273,9 @@ CommandResponse FlowMeasure::CommandReadStats(
               << " pkts=" << stat_ptr->pkt_count
               << " bytes=" << stat_ptr->byte_count;
 
-      const auto lat_summary    = stat_ptr->latency_histogram.Summarize(lat_percs);
-      const auto jitter_summary = stat_ptr->jitter_histogram.Summarize(jitter_percs);
+      const auto lat_summary = stat_ptr->latency_histogram.Summarize(lat_percs);
+      const auto jitter_summary =
+          stat_ptr->jitter_histogram.Summarize(jitter_percs);
 
       bess::pb::FlowMeasureReadResponse::Statistic stat;
       stat.set_fseid(key.fseid);
@@ -287,8 +292,7 @@ CommandResponse FlowMeasure::CommandReadStats(
   }  // shared_lock released here — before clear
 
   LOG(INFO) << name() << ": [v2-FIXED] iteration complete."
-            << " seen=" << entries_seen
-            << " exported=" << entries_exported
+            << " seen=" << entries_seen << " exported=" << entries_exported
             << " empty=" << entries_empty;
 
   if (arg.clear()) {
@@ -301,10 +305,11 @@ CommandResponse FlowMeasure::CommandReadStats(
   }
 
   auto elapsed = std::chrono::duration<double>(
-      std::chrono::high_resolution_clock::now() - t_start).count();
+                     std::chrono::high_resolution_clock::now() - t_start)
+                     .count();
 
-  LOG(INFO) << name() << ": [v2-FIXED] CommandReadStats() done in "
-            << elapsed << " s"
+  LOG(INFO) << name() << ": [v2-FIXED] CommandReadStats() done in " << elapsed
+            << " s"
             << " stats_returned=" << resp.statistics_size();
 
   return CommandSuccess(resp);
@@ -313,7 +318,6 @@ CommandResponse FlowMeasure::CommandReadStats(
 /*----------------------------------------------------------------------------------*/
 CommandResponse FlowMeasure::CommandFlipFlag(
     const bess::pb::FlowMeasureCommandFlipArg &) {
-
   if (!leader_) {
     LOG(ERROR) << name() << ": [v2-FIXED] CommandFlipFlag on non-leader";
     return CommandFailure(EINVAL, "only leaders can flip the flag");
@@ -330,8 +334,7 @@ CommandResponse FlowMeasure::CommandFlipFlag(
   }
 
   LOG(INFO) << name() << ": [v2-FIXED] CommandFlipFlag()"
-            << " old=" << Flag_Name(old_flag)
-            << " new=" << Flag_Name(new_flag)
+            << " old=" << Flag_Name(old_flag) << " new=" << Flag_Name(new_flag)
             << " — sleeping 10ms to drain in-flight packets...";
 
   bess::pb::FlowMeasureFlipResponse resp;

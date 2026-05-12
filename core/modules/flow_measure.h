@@ -6,8 +6,9 @@
 #define BESS_MODULES_QOS_MEASURE_H_
 
 // NOTE: rte_hash intentionally removed — rte_hash_iterate is not safe when
-// rte_hash_add_key runs concurrently even with RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY.
-// Replaced with std::unordered_map + std::shared_mutex.
+// rte_hash_add_key runs concurrently even with
+// RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY. Replaced with std::unordered_map +
+// std::shared_mutex.
 
 #include <memory>
 #include <mutex>
@@ -52,9 +53,9 @@ class FlowMeasure final : public Module {
   // -----------------------------------------------------------------------
   enum class Flag {
     FLAG_VALUE_INVALID = 0,
-    FLAG_VALUE_A       = 1,
-    FLAG_VALUE_B       = 2,
-    FLAG_VALUE_MAX     = FLAG_VALUE_B,
+    FLAG_VALUE_A = 1,
+    FLAG_VALUE_B = 2,
+    FLAG_VALUE_MAX = FLAG_VALUE_B,
   };
 
   template <typename T>
@@ -65,10 +66,14 @@ class FlowMeasure final : public Module {
 
   static std::string Flag_Name(const Flag &flag) {
     switch (flag) {
-      case Flag::FLAG_VALUE_INVALID: return "FLAG_VALUE_INVALID";
-      case Flag::FLAG_VALUE_A:       return "FLAG_VALUE_A";
-      case Flag::FLAG_VALUE_B:       return "FLAG_VALUE_B";
-      default:                       return "<unknown>";
+      case Flag::FLAG_VALUE_INVALID:
+        return "FLAG_VALUE_INVALID";
+      case Flag::FLAG_VALUE_A:
+        return "FLAG_VALUE_A";
+      case Flag::FLAG_VALUE_B:
+        return "FLAG_VALUE_B";
+      default:
+        return "<unknown>";
     }
   }
 
@@ -119,27 +124,29 @@ class FlowMeasure final : public Module {
     uint64_t last_latency;
 
     static constexpr uint64_t kBucketWidthNs = 1000;
-    static constexpr uint64_t kNumBuckets    = 100;
+    static constexpr uint64_t kNumBuckets = 100;
 
     Histogram<uint64_t> latency_histogram;
     Histogram<uint64_t> jitter_histogram;
-    mutable std::mutex  mutex;
+    mutable std::mutex mutex;
 
     SessionStats()
-        : pkt_count(0), byte_count(0), last_latency(0),
+        : pkt_count(0),
+          byte_count(0),
+          last_latency(0),
           latency_histogram(kNumBuckets, kBucketWidthNs),
           jitter_histogram(kNumBuckets, kBucketWidthNs) {}
 
     // mutex is not movable — must live on heap, accessed via pointer.
-    SessionStats(const SessionStats &)            = delete;
+    SessionStats(const SessionStats &) = delete;
     SessionStats &operator=(const SessionStats &) = delete;
-    SessionStats(SessionStats &&)                 = delete;
-    SessionStats &operator=(SessionStats &&)      = delete;
+    SessionStats(SessionStats &&) = delete;
+    SessionStats &operator=(SessionStats &&) = delete;
 
     void reset() {
       // Caller must hold mutex.
-      pkt_count    = 0;
-      byte_count   = 0;
+      pkt_count = 0;
+      byte_count = 0;
       last_latency = 0;
       latency_histogram.Reset();
       jitter_histogram.Reset();
@@ -160,19 +167,20 @@ class FlowMeasure final : public Module {
   //   clear()       : unique_lock; only ever called on the inactive buffer.
   // -----------------------------------------------------------------------
   struct Buffer {
-    mutable std::shared_mutex                                       map_mutex;
-    std::unordered_map<TableKey, SessionStats *, TableKeyHash>      map;
+    mutable std::shared_mutex map_mutex;
+    std::unordered_map<TableKey, SessionStats *, TableKeyHash> map;
 
-    Buffer()  = default;
+    Buffer() = default;
     ~Buffer() { clear(); }
 
-    Buffer(const Buffer &)            = delete;
+    Buffer(const Buffer &) = delete;
     Buffer &operator=(const Buffer &) = delete;
 
     // Free all heap-allocated SessionStats and empty the map.
     void clear() {
       std::unique_lock<std::shared_mutex> lk(map_mutex);
-      for (auto &kv : map) delete kv.second;
+      for (auto &kv : map)
+        delete kv.second;
       map.clear();
     }
 
@@ -182,14 +190,16 @@ class FlowMeasure final : public Module {
       {
         std::shared_lock<std::shared_mutex> lk(map_mutex);
         auto it = map.find(key);
-        if (it != map.end()) return it->second;
+        if (it != map.end())
+          return it->second;
       }
       // Slow path: exclusive lock, insert new entry.
       std::unique_lock<std::shared_mutex> lk(map_mutex);
       // Re-check after acquiring exclusive lock (another thread may have
       // inserted between the two lock acquisitions).
       auto [it, inserted] = map.emplace(key, nullptr);
-      if (inserted) it->second = new SessionStats();
+      if (inserted)
+        it->second = new SessionStats();
       return it->second;
     }
   };
@@ -202,9 +212,9 @@ class FlowMeasure final : public Module {
   std::unique_ptr<Buffer> buf_a_;
   std::unique_ptr<Buffer> buf_b_;
 
-  mutable std::mutex flag_mutex_;       // protects current_flag_value_
-  Flag               current_flag_value_;
-  bool               leader_;
+  mutable std::mutex flag_mutex_;  // protects current_flag_value_
+  Flag current_flag_value_;
+  bool leader_;
 
   int buffer_flag_attr_id_;
   int ts_attr_id_;
