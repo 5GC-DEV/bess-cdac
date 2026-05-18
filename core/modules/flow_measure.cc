@@ -52,6 +52,8 @@ CommandResponse FlowMeasure::Init(const bess::pb::FlowMeasureArg &arg) {
   if (pdr_attr_id_ < 0)
     return CommandFailure(EINVAL, "invalid metadata declaration");
 
+  // Initialized dynamic buffers using smart pointers to replace manual DPDK
+  // hash creation.
   buf_a_ = std::make_unique<Buffer>();
   buf_b_ = std::make_unique<Buffer>();
 
@@ -88,8 +90,8 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
     uint64_t fseid = get_attr<uint64_t>(this, fseid_attr_id_, batch->pkts()[i]);
     uint32_t pdr = get_attr<uint32_t>(this, pdr_attr_id_, batch->pkts()[i]);
 
-    // If no upstream Timestamp module set ts_ns, use now_ns so the packet
-    // is counted. Latency will be 0 but packet/byte counts remain accurate.
+    // Added fallback to current time for missing timestamps to ensure
+    // packet/byte counts remain accurate.
     if (ts_ns == 0 || now_ns < ts_ns) {
       ts_ns = now_ns;
     }
@@ -110,6 +112,8 @@ void FlowMeasure::ProcessBatch(Context *ctx, bess::PacketBatch *batch) {
     }
 
     TableKey key(fseid, pdr);
+    // Replaced index-based lookup with a thread-safe get_or_create pattern for
+    // dynamic flow tracking.
     SessionStats *stat = buf->get_or_create(key);
 
     const std::lock_guard<std::mutex> lock(stat->mutex);
@@ -169,10 +173,8 @@ CommandResponse FlowMeasure::CommandReadStats(
                                          arg.jitter_percentiles().end());
 
   {
-    // shared_lock: ProcessBatch may concurrently look up entries on this
-    // buffer via get_or_create fast-path, but since the flag was flipped
-    // before this call, ProcessBatch is actually writing to the other buffer.
-    // No writers are active here — iteration is safe.
+    // Used shared_lock to allow concurrent dataplane lookups while the control
+    // plane iterates through the map.
     std::shared_lock<std::shared_mutex> map_lk(buf->map_mutex);
 
     for (auto &[key, stat_ptr] : buf->map) {

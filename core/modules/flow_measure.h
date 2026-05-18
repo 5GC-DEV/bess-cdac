@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  * Copyright 2021 Open Networking Foundation
  */
+
 #ifndef BESS_MODULES_QOS_MEASURE_H_
 #define BESS_MODULES_QOS_MEASURE_H_
 
@@ -75,6 +76,8 @@ class FlowMeasure final : public Module {
     TableKey(uint64_t fseid, uint64_t pdr) : fseid(fseid), pdr(pdr) {}
     TableKey() : fseid(0), pdr(0) {}
 
+    // Overloaded equality operator to support TableKey lookup in
+    // std::unordered_map.
     bool operator==(const TableKey &o) const {
       return fseid == o.fseid && pdr == o.pdr;
     }
@@ -89,6 +92,8 @@ class FlowMeasure final : public Module {
   static_assert(std::is_trivially_copyable<TableKey>::value,
                 "TableKey must be trivially copyable.");
 
+  // Custom hash function to enable TableKey use within standard C++ associative
+  // containers.
   struct TableKeyHash {
     std::size_t operator()(const TableKey &k) const noexcept {
       std::size_t h = k.fseid;
@@ -121,6 +126,8 @@ class FlowMeasure final : public Module {
           latency_histogram(kNumBuckets, kBucketWidthNs),
           jitter_histogram(kNumBuckets, kBucketWidthNs) {}
 
+    // Explicitly deleted copy/move operations to ensure stat objects remain
+    // stationary in memory.
     SessionStats(const SessionStats &) = delete;
     SessionStats &operator=(const SessionStats &) = delete;
     SessionStats(SessionStats &&) = delete;
@@ -135,12 +142,14 @@ class FlowMeasure final : public Module {
     }
   };
 
-  // One side of the double-buffer.
-  // Replaces rte_hash* + std::vector<SessionStats>.
-  // std::shared_mutex allows concurrent ProcessBatch lookups (shared_lock)
-  // while serialising new-entry insertion and clear (unique_lock).
+  // Encapsulated map and shared_mutex into a Buffer struct to manage
+  // side-specific locking and lifecycle.
   struct Buffer {
+    // Uses shared_lock for high-performance concurrent lookups and unique_lock
+    // for flow insertion/clearing.
     mutable std::shared_mutex map_mutex;
+    // Replaced fixed-size DPDK hash with dynamic unordered_map to support an
+    // unlimited number of flows.
     std::unordered_map<TableKey, SessionStats *, TableKeyHash> map;
 
     Buffer() = default;
@@ -156,6 +165,8 @@ class FlowMeasure final : public Module {
       map.clear();
     }
 
+    // Stored pointers instead of objects to prevent pointer invalidation during
+    // map rehashing.
     SessionStats *get_or_create(const TableKey &key) {
       {
         std::shared_lock<std::shared_mutex> lk(map_mutex);
@@ -177,6 +188,8 @@ class FlowMeasure final : public Module {
   Flag current_flag_value_;
   mutable std::mutex flag_mutex_;
 
+  // Switched to unique_ptr for buffers to ensure automatic and safe memory
+  // cleanup during DeInit.
   std::unique_ptr<Buffer> buf_a_;
   std::unique_ptr<Buffer> buf_b_;
 
