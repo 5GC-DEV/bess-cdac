@@ -6,9 +6,12 @@
 #ifndef BESS_MODULES_QOS_MEASURE_H_
 #define BESS_MODULES_QOS_MEASURE_H_
 
-#include <rte_hash.h>
-
+#include <memory>
 #include <mutex>
+#include <shared_mutex>
+#include <sstream>
+#include <string>
+#include <unordered_map>
 
 #include "../core/utils/histogram.h"
 #include "../module.h"
@@ -17,43 +20,43 @@ class FlowMeasure final : public Module {
  public:
   FlowMeasure()
       : leader_(false),
-        current_flag_value_(),
-        table_a_(nullptr),
-        table_b_(nullptr),
+        current_flag_value_(Flag::FLAG_VALUE_INVALID),
+        buf_a_(nullptr),
+        buf_b_(nullptr),
         ts_attr_id_(-1),
         fseid_attr_id_(-1),
-        pdr_attr_id_(-1) {
-    // Multi-writer support is not enabled on the hash maps.
+        pdr_attr_id_(-1),
+        buffer_flag_attr_id_(-1) {
     max_allowed_workers_ = 1;
   }
 
-  static constexpr uint32_t kDefaultNumEntries = 1 << 15;
   static const Commands cmds;
+
   CommandResponse Init(const bess::pb::FlowMeasureArg &arg);
   void DeInit() override;
   void ProcessBatch(Context *ctx, bess::PacketBatch *batch) override;
-  std::string GetDesc() const override { return ""; };
+  std::string GetDesc() const override { return ""; }
+
   CommandResponse CommandReadStats(
       const bess::pb::FlowMeasureCommandReadArg &arg);
   CommandResponse CommandFlipFlag(
       const bess::pb::FlowMeasureCommandFlipArg &arg);
 
  private:
-  // Flag represents a collection of possible values to select buffer sides.
   enum class Flag {
     FLAG_VALUE_INVALID = 0,
-    FLAG_VALUE_A,
-    FLAG_VALUE_B,
+    FLAG_VALUE_A = 1,
+    FLAG_VALUE_B = 2,
     FLAG_VALUE_MAX = FLAG_VALUE_B,
   };
 
   template <typename T>
   static constexpr bool Flag_IsValid(T value) {
-    Flag flag = static_cast<Flag>(value);
-    return flag > Flag::FLAG_VALUE_INVALID && flag <= Flag::FLAG_VALUE_MAX;
+    Flag f = static_cast<Flag>(value);
+    return f > Flag::FLAG_VALUE_INVALID && f <= Flag::FLAG_VALUE_MAX;
   }
 
-  static const std::string Flag_Name(const Flag &flag) {
+  static std::string Flag_Name(const Flag &flag) {
     switch (flag) {
       case Flag::FLAG_VALUE_INVALID:
         return "FLAG_VALUE_INVALID";
@@ -62,48 +65,74 @@ class FlowMeasure final : public Module {
       case Flag::FLAG_VALUE_B:
         return "FLAG_VALUE_B";
       default:
-        return "";
+        return "<unknown>";
     }
   }
 
-  // TableKey encapsulates all information used to identify a flow and is used
-  // as the lookup key in the hash tables. It is packed and aligned to
-  // calculating a hash over the raw bytes of the struct is ok.
   struct __attribute__((packed, aligned(16))) TableKey {
     uint64_t fseid;
     uint64_t pdr;
+
     TableKey(uint64_t fseid, uint64_t pdr) : fseid(fseid), pdr(pdr) {}
     TableKey() : fseid(0), pdr(0) {}
+
+    // Overloaded equality operator to support TableKey lookup in
+    // std::unordered_map.
+    bool operator==(const TableKey &o) const {
+      return fseid == o.fseid && pdr == o.pdr;
+    }
+
     std::string ToString() const {
       std::stringstream ss;
       ss << "{ fseid: " << fseid << ", pdr: " << pdr << " }";
       return ss.str();
     }
   };
-  static_assert(std::is_trivially_copyable<TableKey>::value,
-                "TableKey must be is_trivially_copyable.");
 
-  // SessionStats ...
+  static_assert(std::is_trivially_copyable<TableKey>::value,
+                "TableKey must be trivially copyable.");
+
+  // Custom hash function to enable TableKey use within standard C++ associative
+  // containers.
+  struct TableKeyHash {
+    std::size_t operator()(const TableKey &k) const noexcept {
+      std::size_t h = k.fseid;
+      h ^= h >> 33;
+      h *= 0xff51afd7ed558ccdULL;
+      h ^= h >> 33;
+      h *= 0xc4ceb9fe1a85ec53ULL;
+      h ^= h >> 33;
+      h ^= k.pdr * 0x9e3779b97f4a7c15ULL;
+      return h;
+    }
+  };
+
   struct SessionStats {
     uint64_t pkt_count;
     uint64_t byte_count;
     uint64_t last_latency;
+
+    static constexpr uint64_t kBucketWidthNs = 1000;
+    static constexpr uint64_t kNumBuckets = 100;
+
     Histogram<uint64_t> latency_histogram;
     Histogram<uint64_t> jitter_histogram;
     mutable std::mutex mutex;
-    static constexpr uint64_t kBucketWidthNs = 1000;  // accuracy: 1 us
-    static constexpr uint64_t kNumBuckets = 100;      // range: 0 - 100 us
+
     SessionStats()
         : pkt_count(0),
           byte_count(0),
           last_latency(0),
           latency_histogram(kNumBuckets, kBucketWidthNs),
           jitter_histogram(kNumBuckets, kBucketWidthNs) {}
-    // Move allowed, copy not allowed.
+
+    // Explicitly deleted copy/move operations to ensure stat objects remain
+    // stationary in memory.
     SessionStats(const SessionStats &) = delete;
-    SessionStats(SessionStats &&) noexcept = default;
     SessionStats &operator=(const SessionStats &) = delete;
-    SessionStats &operator=(SessionStats &&) = default;
+    SessionStats(SessionStats &&) = delete;
+    SessionStats &operator=(SessionStats &&) = delete;
+
     void reset() {
       pkt_count = 0;
       byte_count = 0;
@@ -112,13 +141,56 @@ class FlowMeasure final : public Module {
       jitter_histogram.Reset();
     }
   };
+
+  // Encapsulated map and shared_mutex into a Buffer struct to manage
+  // side-specific locking and lifecycle.
+  struct Buffer {
+    // Uses shared_lock for high-performance concurrent lookups and unique_lock
+    // for flow insertion/clearing.
+    mutable std::shared_mutex map_mutex;
+    // Replaced fixed-size DPDK hash with dynamic unordered_map to support an
+    // unlimited number of flows.
+    std::unordered_map<TableKey, SessionStats *, TableKeyHash> map;
+
+    Buffer() = default;
+    ~Buffer() { clear(); }
+
+    Buffer(const Buffer &) = delete;
+    Buffer &operator=(const Buffer &) = delete;
+
+    void clear() {
+      std::unique_lock<std::shared_mutex> lk(map_mutex);
+      for (auto &kv : map)
+        delete kv.second;
+      map.clear();
+    }
+
+    // Stored pointers instead of objects to prevent pointer invalidation during
+    // map rehashing.
+    SessionStats *get_or_create(const TableKey &key) {
+      {
+        std::shared_lock<std::shared_mutex> lk(map_mutex);
+        auto it = map.find(key);
+        if (it != map.end())
+          return it->second;
+      }
+      std::unique_lock<std::shared_mutex> lk(map_mutex);
+      auto [it, inserted] = map.emplace(key, nullptr);
+      if (inserted)
+        it->second = new SessionStats();
+      return it->second;
+    }
+  };
+
   bool leader_;
-  Flag current_flag_value_;  // protected by flag_mutex_
+  Flag current_flag_value_;
   mutable std::mutex flag_mutex_;
-  rte_hash *table_a_;
-  rte_hash *table_b_;
-  std::vector<SessionStats> table_data_a_;
-  std::vector<SessionStats> table_data_b_;
+
+  // Switched to unique_ptr for buffers to ensure automatic and safe memory
+  // cleanup during DeInit.
+  std::unique_ptr<Buffer> buf_a_;
+  std::unique_ptr<Buffer> buf_b_;
+
   int ts_attr_id_;
   int fseid_attr_id_;
   int pdr_attr_id_;
