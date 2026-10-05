@@ -60,7 +60,7 @@ CXXVERSION := $(shell $(CXX) -dumpversion)
 
 ifeq "$(CXXCOMPILER)" "g++"
   ifneq "$(shell printf '$(CXXVERSION)\n7' | sort -V | head -n1)" "7"
-    $(error g++ 7 or higher is required. Use container_build.py if newer g++ is not available.)
+    $(error g++ 7 or higher is required.)
   endif
 endif
 
@@ -68,15 +68,17 @@ HAS_PKG_CONFIG := $(shell command -v $(PKG_CONFIG) 2>&1 >/dev/null && echo yes |
 
 # We always want these libraries to be dynamically linked even when the
 # user requests a static build.
-ALWAYS_DYN_LIBS := -lpcap -lpthread -ldl -lgrpc++
+# Note: -lgrpc and -lgpr are listed explicitly in addition to -lgrpc++
+# because newer gRPC installations no longer pull them in transitively
+ALWAYS_DYN_LIBS := -lpcap -lpthread -ldl -lgrpc++ -lgrpc -lgpr -labsl_synchronization -llzma
 # These libraries are not supported by pkg-config.
 ALWAYS_LIBS := -lgflags -lnuma
-# If pkg-config is available, we just need a list of the dependecies.
-PKG_CONFIG_DEPS := libdpdk libglog protobuf libcndp
+# If pkg-config is available, we just need a list of the dependencies.
+PKG_CONFIG_DEPS := libdpdk libglog protobuf
 # If pkg-config is not available, we need to list the libs we depend on.
 NO_PKG_CONFIG_LIBS := -lglog -lgflags -lprotobuf
 # If pkg-config is not available and we're static linking, we also need
-# the indirect dependecies.  This is annoying, because they may change
+# the indirect dependencies.  This is annoying, because they may change
 # in future versions.
 NO_PKG_CONFIG_LIBS_INDIRECT := -lgrpc -lssl -lcrypto -llzma
 
@@ -103,13 +105,8 @@ CXXFLAGS += -std=c++17 -g3 -ggdb3 -march=$(CPU) \
             -isystem $(COREDIR) \
             -isystem $(dir $<).. -isystem $(COREDIR)/modules \
             -D_GNU_SOURCE \
-            -Werror -Wall -Wextra -Wcast-align -Wno-error=deprecated-declarations \
-            -Wno-error=array-bounds \
+            -Werror -Wall -Wextra -Wcast-align \
             $(PKG_CFLAGS)
-
-ifeq "$(shell test $(CXXVERSION) -ge 9; echo $$?)" "0"
-  CXXFLAGS += -Wno-error=address-of-packed-member
-endif
 
 PERMISSIVE := -Wno-unused-parameter -Wno-missing-field-initializers
 
@@ -123,7 +120,10 @@ ifeq "$(shell expr $(CXXCOMPILER) = g++)" "1"
   CXXFLAGS += -fno-gnu-unique
 endif
 
-LDFLAGS += -rdynamic
+LDFLAGS += -rdynamic -no-pie
+# Shared-object link flags: exclude -no-pie (incompatible with -shared)
+# and add $(LIBS) so plugin .so files resolve symbols from shared libraries.
+MODULE_LDFLAGS = -rdynamic
 ifdef BESS_LINK_DYNAMIC
   LIBS_ALL_SHARED = -Wl,-call_shared
   LIBS_DL_SHARED =
@@ -156,11 +156,13 @@ LIBS += -Wl,-non_shared \
 ifdef SANITIZE
   CXXFLAGS += -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
   LDFLAGS += -fsanitize=address -fsanitize=undefined
+  MODULE_LDFLAGS += -fsanitize=address -fsanitize=undefined
 endif
 
 ifdef COVERAGE
   CXXFLAGS += --coverage -O0
   LDFLAGS += --coverage
+  MODULE_LDFLAGS += --coverage
 else ifdef DEBUG
   CXXFLAGS += -O0
 else
@@ -415,7 +417,7 @@ $(eval $(call BUILD, \
         MODULE_LD, \
         %.so, \
         %.o, \
-        $(CXX) -shared -o $$@ $$^ $(LDFLAGS)))
+        $(CXX) -shared -o $$@ $$^ $(MODULE_LDFLAGS) $(LIBS)))
 
 $(eval $(call BUILD, \
         MODULE_TEST_LD, \

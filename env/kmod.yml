@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: 2017, The Regents of the University of California.
 # SPDX-FileCopyrightText: 2024, Intel Corporation
 # SPDX-License-Identifier: BSD-3-Clause
-
 - hosts: all
   tags: kmod
   tasks:
@@ -13,7 +12,6 @@
           - ca-certificates
           - build-essential
           - linux-headers-generic
-          - linux-headers-{{ansible_kernel}}
         state: latest
         update_cache: yes
       become: true

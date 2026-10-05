@@ -40,19 +40,14 @@ import subprocess
 import sys
 import time
 
-TARGET_REGISTRY = os.getenv("DOCKER_REGISTRY", "registry.aetherproject.org/")
-TARGET_REPOSITORY = os.getenv("DOCKER_REPOSITORY", "sdcore/")
+TARGET_REGISTRY = os.getenv("DOCKER_REGISTRY", "ghcr.io/")
+TARGET_REPOSITORY = os.getenv("DOCKER_REPOSITORY", "omec-project/")
 TARGET = "bess_build"
 FULL_TARGET = TARGET_REGISTRY + TARGET_REPOSITORY + TARGET
 
-imgs = {
-    'focal64': {'base': 'ubuntu:focal', 'tag_suffix': ''},
-    'jammy64': {'base': 'ubuntu:jammy', 'tag_suffix': ''},
-}
-
 
 def print_usage(prog):
-    print('Usage - {} [{}]'.format(prog, '|'.join(imgs.keys())))
+    print('Usage - {}'.format(prog))
 
 
 def run_cmd(cmd, shell=False):
@@ -62,17 +57,13 @@ def run_cmd(cmd, shell=False):
         subprocess.check_call(shlex.split(cmd))
 
 
-def build(env):
-    base = imgs[env]['base']
-    tag_suffix = imgs[env]['tag_suffix']
-    bess_dpdk_branch = os.getenv('BESS_DPDK_BRANCH', 'main')
+def build():
+    tag_suffix = ''
     version = time.strftime('%y%m%d')
 
     run_cmd('docker build -f env/Dockerfile '
-            '--build-arg BASE_IMAGE={base} '
-            '--build-arg BESS_DPDK_BRANCH={branch} '
             '-t {target}:latest{suffix} -t {target}:{version}{suffix} '
-            '.'.format(base=base, branch=bess_dpdk_branch, target=FULL_TARGET,
+            '.'.format(target=FULL_TARGET,
                        version=version, suffix=tag_suffix))
 
     print('Build succeeded: {}:{}{}'.format(FULL_TARGET, version, tag_suffix))
@@ -82,17 +73,16 @@ def build(env):
 
 
 def push(version, tag_suffix):
-    run_cmd('docker login')
     run_cmd('docker push {}:latest{}'.format(FULL_TARGET, tag_suffix))
     run_cmd('docker push {}:{}{}'.format(FULL_TARGET, version, tag_suffix))
 
 
 def main(argv):
-    if len(argv) != 2 or argv[1] not in imgs.keys():
+    if len(argv) != 1:
         print_usage(argv[0])
         return 2
 
-    version, tag_suffix = build(argv[1])
+    version, tag_suffix = build()
 
     prompt = input  # Python 3
 

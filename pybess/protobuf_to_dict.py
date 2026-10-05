@@ -99,7 +99,7 @@ def protobuf_to_dict(pb, type_callable_map=TYPE_CALLABLE_MAP, use_enum_labels=Fa
         else:
             type_callable = _get_field_value_adaptor(
                 pb, field, type_callable_map, use_enum_labels)
-            if field.label == FieldDescriptor.LABEL_REPEATED:
+            if field.is_repeated:
                 type_callable = repeated(type_callable)
 
         if field.is_extension:
@@ -222,7 +222,7 @@ def _get_base_string_type():
 
 def _handle_repeated_field(field, input_value, pb_value, type_callable_map, strict, basestr):  
     """Handle repeated fields including map entries."""  
-    if field.label != FieldDescriptor.LABEL_REPEATED:  
+    if not field.is_repeated:
         return False  
       
     if _is_map_field(field):  
@@ -233,11 +233,11 @@ def _handle_repeated_field(field, input_value, pb_value, type_callable_map, stri
       
     return True  
 
-def _is_map_field(field):  
-    """Check if field is a map entry."""  
-    return (field.message_type and   
-            field.message_type.has_options and   
-            field.message_type.GetOptions().map_entry)  
+def _is_map_field(field):
+    """Check if field is a map entry."""
+    return (field.message_type and
+            field.message_type.has_options and
+            field.message_type.GetOptions().map_entry)
 
 def _handle_map_field(field, input_value, pb_value, type_callable_map, strict):  
     """Handle map field processing."""  

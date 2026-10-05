@@ -35,8 +35,8 @@ from test_utils import BessModuleTestCase, UrlFilter, scapy, unittest
 from pybess import protobuf_to_dict as pb_conv
 
 # constants for duplicate literals
-BLACKLISTED_HOST = 'www.blacklisted.com'  
-BLUELISTED_HOST = 'www.bluelisted.com'  
+BLACKLISTED_HOST = 'www.blacklisted.com'
+BLUELISTED_HOST = 'www.bluelisted.com'
 
 class BessUrlFilterTest(BessModuleTestCase):
 
@@ -98,10 +98,10 @@ class BessUrlFilterTest(BessModuleTestCase):
         # and 2 packets on gate 1:
         #  1) 403 to 192.168.0.2
         #  2) RST to 192.168.0.2
-        self.assertEquals(len(pkt_outs[0]), 4)
+        self.assertEqual(len(pkt_outs[0]), 4)
         self.assertSamePackets(pkt_outs[0][1], good_pkt)
 
-        self.assertEquals(len(pkt_outs[1]), 2)
+        self.assertEqual(len(pkt_outs[1]), 2)
         self.assertSamePackets(pkt_outs[1][0], err_pkt)
 
     def test_urlfilter_selfconfig(self):

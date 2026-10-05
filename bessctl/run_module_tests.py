@@ -75,8 +75,10 @@ def main():
 
     any_failure = 0
 
+    daemon_start_cmd = '%s daemon start' % bessctl
+
     try:
-        run_cmd('%s daemon start -m 0' % bessctl)
+        run_cmd(daemon_start_cmd)
     except CommandError:
         raise RuntimeError('bess daemon could not start')
 
@@ -87,7 +89,7 @@ def main():
             run_cmd('%s daemon reset -- run file %s' % (bessctl, file_name))
         except CommandError:
             any_failure = 1
-            run_cmd('%s daemon start -m 0' % bessctl)
+            run_cmd(daemon_start_cmd)
 
     sys.exit(any_failure)
 

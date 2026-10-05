@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2023 Intel Corporation
 aetherproject
+Aether
 Ansible
 bess
 pre
@@ -75,10 +76,7 @@ LaTeX
 doxygen
 sdcore
 sudo
-CNDP
 bessctl
-cndp
-cndpfwd
 conf
 coreid
 ethtool
@@ -86,6 +84,7 @@ jsonc
 netdev
 recv
 OpenFlow
+OpenSSF
 SoftNIC
 programmability
 Nefeli
@@ -96,7 +95,6 @@ customizability
 XDP
 https
 cd
-besscndp
 runtime
 epc
 ghcr

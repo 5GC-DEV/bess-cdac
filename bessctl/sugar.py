@@ -121,7 +121,7 @@ STRING_LONG = r'\'\'\'.*?\'\'\'|""".*?"""'
 STRING_ALL = STRING_LONG + '|' + STRING_SHORT
 
 # constants for duplicate literals
-BESS_ENV_PREFIX = "__bess_env__('" 
+BESS_ENV_PREFIX = "__bess_env__('"
 
 def replace_envvar(s):
     environment = r'\$(' + NAME + ')'\

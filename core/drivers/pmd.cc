@@ -32,12 +32,20 @@
 
 #include "pmd.h"
 
-#include <bus_driver.h>
-#include <bus_pci_driver.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <vector>
+
 #include <rte_bus.h>
 #include <rte_bus_pci.h>
+#include <rte_dev.h>
 #include <rte_ethdev.h>
 #include <rte_flow.h>
+#include <rte_pci.h>
+#include <rte_string_fns.h>
 
 #include "../utils/ether.h"
 #include "../utils/format.h"
@@ -52,19 +60,50 @@ static uint8_t rss_key[40] = {0xD8, 0x2A, 0x6C, 0x5A, 0xDD, 0x3B, 0x9D, 0x1E,
 static const rte_eth_conf default_eth_conf(const rte_eth_dev_info &dev_info,
                                            int nb_rxq) {
   rte_eth_conf ret = {};
+  const bool can_use_custom_rss_key =
+      dev_info.hash_key_size > 0 && dev_info.hash_key_size <= sizeof(rss_key);
 
   ret.link_speeds = RTE_ETH_LINK_SPEED_AUTONEG;
   ret.rxmode.mq_mode = (nb_rxq > 1) ? RTE_ETH_MQ_RX_RSS : RTE_ETH_MQ_RX_NONE;
   ret.rxmode.offloads = 0;
 
-  ret.rx_adv_conf.rss_conf = {
-      .rss_key = rss_key,
-      .rss_key_len = sizeof(rss_key),
-      .rss_hf = (RTE_ETH_RSS_IP | RTE_ETH_RSS_UDP | RTE_ETH_RSS_TCP |
-                 RTE_ETH_RSS_SCTP) &
-                dev_info.flow_type_rss_offloads,
-  };
+  // Only configure RSS when the device supports it.  DPDK 23.11+ validates
+  // rss_key_len against dev_info.hash_key_size, and rss_algo_capa against
+  // the requested algorithm. Devices like AF_PACKET report both as 0,
+  // while some PMDs such as net_iavf require a longer RSS key than the
+  // built-in 40-byte default used here. In those cases, leave the key unset
+  // so the PMD can apply its own default key instead of rejecting the config.
+  if (dev_info.hash_key_size > 0 && dev_info.flow_type_rss_offloads != 0) {
+    ret.rx_adv_conf.rss_conf = {
+        .rss_key = can_use_custom_rss_key ? rss_key : nullptr,
+        .rss_key_len = can_use_custom_rss_key
+                           ? static_cast<uint8_t>(dev_info.hash_key_size)
+                           : static_cast<uint8_t>(0),
+        .rss_hf = (RTE_ETH_RSS_IP | RTE_ETH_RSS_UDP | RTE_ETH_RSS_TCP |
+                   RTE_ETH_RSS_SCTP) &
+                  dev_info.flow_type_rss_offloads,
+        .algorithm = RTE_ETH_HASH_FUNCTION_DEFAULT,
+    };
+  }
 
+  return ret;
+}
+
+static int get_eth_dev_info(dpdk_port_t port_id, rte_eth_dev_info *dev_info) {
+  int ret = rte_eth_dev_info_get(port_id, dev_info);
+  if (ret != 0) {
+    LOG(ERROR) << "rte_eth_dev_info_get(" << static_cast<int>(port_id)
+               << ") failed: " << rte_strerror(-ret);
+  }
+  return ret;
+}
+
+static int get_link_status_nowait(dpdk_port_t port_id, rte_eth_link *status) {
+  int ret = rte_eth_link_get_nowait(port_id, status);
+  if (ret != 0) {
+    LOG(ERROR) << "rte_eth_link_get_nowait(" << static_cast<int>(port_id)
+               << ") failed: " << rte_strerror(-ret);
+  }
   return ret;
 }
 
@@ -76,7 +115,9 @@ void PMDPort::InitDriver() {
 
   for (dpdk_port_t i = 0; i < num_dpdk_ports; i++) {
     rte_eth_dev_info dev_info;
-    rte_eth_dev_info_get(i, &dev_info);
+    if (get_eth_dev_info(i, &dev_info) != 0) {
+      continue;
+    }
 
     bess::utils::Ethernet::Address lladdr;
     rte_eth_macaddr_get(i, reinterpret_cast<rte_ether_addr *>(lladdr.bytes));
@@ -85,13 +126,11 @@ void PMDPort::InitDriver() {
 
     std::string pci_info;
     if (dev_info.device) {
-      rte_bus *bus = rte_bus_find_by_device(dev_info.device);
-      if (bus && !strcmp(bus->name, "pci")) {
-        rte_pci_device *pci_dev = RTE_DEV_TO_PCI(dev_info.device);
-        pci_info = bess::utils::Format(
-            "%08x:%02hhx:%02hhx.%02hhx %04hx:%04hx  ", pci_dev->addr.domain,
-            pci_dev->addr.bus, pci_dev->addr.devid, pci_dev->addr.function,
-            pci_dev->id.vendor_id, pci_dev->id.device_id);
+      const rte_bus *bus = rte_bus_find_by_device(dev_info.device);
+      if (bus && !strcmp(rte_bus_name(bus), "pci")) {
+        const char *bus_info = rte_dev_bus_info(dev_info.device);
+        if (bus_info)
+          pci_info = std::string(bus_info) + "  ";
       }
     }
 
@@ -150,13 +189,16 @@ static CommandResponse find_dpdk_port_by_pci_addr(const std::string &pci,
   dpdk_port_t num_dpdk_ports = rte_eth_dev_count_avail();
   for (dpdk_port_t i = 0; i < num_dpdk_ports; i++) {
     rte_eth_dev_info dev_info;
-    rte_eth_dev_info_get(i, &dev_info);
+    if (get_eth_dev_info(i, &dev_info) != 0) {
+      continue;
+    }
 
     if (dev_info.device) {
       bus = rte_bus_find_by_device(dev_info.device);
-      if (bus && !strcmp(bus->name, "pci")) {
-        const rte_pci_device *pci_dev = RTE_DEV_TO_PCI(dev_info.device);
-        if (rte_pci_addr_cmp(&addr, &pci_dev->addr) == 0) {
+      if (bus && !strcmp(rte_bus_name(bus), "pci")) {
+        rte_pci_addr dev_addr;
+        if (rte_pci_addr_parse(rte_dev_name(dev_info.device), &dev_addr) == 0 &&
+            rte_pci_addr_cmp(&addr, &dev_addr) == 0) {
           port_id = i;
           break;
         }
@@ -208,7 +250,7 @@ static CommandResponse find_dpdk_vdev(const std::string &vdev,
 
   rte_dev_iterator iterator;
   RTE_ETH_FOREACH_MATCHING_DEV(port_id, vdev.c_str(), &iterator) {
-    LOG(INFO) << "port id: " << port_id << "matches vdev: " << vdev;
+    LOG(INFO) << "port id: " << port_id << " matches vdev: " << vdev;
     rte_eth_iterator_cleanup(&iterator);
     break;
   }
@@ -222,8 +264,8 @@ CommandResponse flow_create_one(dpdk_port_t port_id,
                                 const uint32_t &flow_profile, int size,
                                 uint64_t rss_types,
                                 rte_flow_item_type *pattern) {
-  struct rte_flow_item items[size];
-  memset(items, 0, sizeof(items));
+  std::vector<struct rte_flow_item> items(size);
+  memset(items.data(), 0, items.size() * sizeof(items[0]));
 
   for (int i = 0; i < size; i++) {
     items[i].type = pattern[i];
@@ -252,13 +294,14 @@ CommandResponse flow_create_one(dpdk_port_t port_id,
   actions[0].conf = &action_rss;
   actions[1].type = RTE_FLOW_ACTION_TYPE_END;
 
-  int ret = rte_flow_validate(port_id, &attributes, items, actions, &err);
+  int ret =
+      rte_flow_validate(port_id, &attributes, items.data(), actions, &err);
   if (ret)
     return CommandFailure(EINVAL,
                           "Port %u: Failed to validate flow profile %u %s",
                           port_id, flow_profile, err.message);
 
-  handle = rte_flow_create(port_id, &attributes, items, actions, &err);
+  handle = rte_flow_create(port_id, &attributes, items.data(), actions, &err);
   if (handle == nullptr)
     return CommandFailure(EINVAL, "Port %u: Failed to create flow %s", port_id,
                           err.message);
@@ -371,7 +414,10 @@ CommandResponse PMDPort::Init(const bess::pb::PMDPortArg &arg) {
 
   /* Use defaut rx/tx configuration as provided by PMD drivers,
    * with minor tweaks */
-  rte_eth_dev_info_get(ret_port_id, &dev_info);
+  ret = get_eth_dev_info(ret_port_id, &dev_info);
+  if (ret != 0) {
+    return CommandFailure(-ret, "rte_eth_dev_info_get() failed");
+  }
 
   eth_conf = default_eth_conf(dev_info, num_rxq);
   if (arg.loopback()) {
@@ -472,6 +518,49 @@ CommandResponse PMDPort::Init(const bess::pb::PMDPortArg &arg) {
     }
   }
 
+  // Workaround for af_packet PMD: DPDK's rte_eth_dev_start() internally
+  // calls rte_eth_dev_config_restore() which re-applies promiscuous mode
+  // via ioctl(SIOCSIFFLAGS).  If the flags are already set, the redundant
+  // ioctl can fail with EPERM in restricted environments (containers
+  // without CAP_NET_ADMIN, etc.).  Pre-sync the interface flags here so
+  // that DPDK's set-flags call becomes a harmless no-op.
+  const char *driver_name = dev_info.driver_name ? dev_info.driver_name : "";
+  if (strcmp(driver_name, "net_af_packet") == 0 &&
+      arg.port_case() == bess::pb::PMDPortArg::kVdev) {
+    const std::string &vdev = arg.vdev();
+    // Extract kernel interface name from vdev string
+    // "net_af_packet0,iface=eth0,..."
+    auto pos = vdev.find("iface=");
+    if (pos != std::string::npos) {
+      std::string kif_name = vdev.substr(pos + 6);
+      auto comma = kif_name.find(',');
+      if (comma != std::string::npos)
+        kif_name.resize(comma);
+
+      // Ensure interface name fits into ifr.ifr_name (IFNAMSIZ) before copying.
+      if (kif_name.length() < IFNAMSIZ) {
+        struct ifreq ifr = {};
+        int sock = socket(PF_INET, SOCK_DGRAM, 0);
+        if (sock >= 0) {
+          rte_strlcpy(ifr.ifr_name, kif_name.c_str(), IFNAMSIZ);
+          if (ioctl(sock, SIOCGIFFLAGS, &ifr) == 0) {
+            uint32_t desired = ifr.ifr_flags | IFF_UP;
+            if (arg.promiscuous_mode())
+              desired |= IFF_PROMISC;
+            if (static_cast<uint32_t>(ifr.ifr_flags) != desired) {
+              ifr.ifr_flags = desired;
+              if (ioctl(sock, SIOCSIFFLAGS, &ifr) != 0) {
+                LOG(WARNING) << "af_packet: failed to set flags on " << kif_name
+                             << ": " << strerror(errno);
+              }
+            }
+          }
+          close(sock);
+        }
+      }
+    }
+  }
+
   ret = rte_eth_dev_start(ret_port_id);
   if (ret != 0) {
     return CommandFailure(-ret, "rte_eth_dev_start() failed");
@@ -490,7 +579,7 @@ CommandResponse PMDPort::Init(const bess::pb::PMDPortArg &arg) {
   // Reset hardware stat counters, as they may still contain previous data
   CollectStats(true);
 
-  driver_ = dev_info.driver_name ?: "unknown";
+  driver_ = dev_info.driver_name ? dev_info.driver_name : "unknown";
 
   if (arg.flow_profiles_size() > 0) {
     for (int i = 0; i < arg.flow_profiles_size(); ++i) {
@@ -555,16 +644,19 @@ void PMDPort::DeInit() {
 
   if (hot_plugged_) {
     rte_eth_dev_info dev_info;
-    rte_eth_dev_info_get(dpdk_port_id_, &dev_info);
+    if (get_eth_dev_info(dpdk_port_id_, &dev_info) != 0) {
+      rte_eth_dev_close(dpdk_port_id_);
+      return;
+    }
 
     char name[RTE_ETH_NAME_MAX_LEN];
     int ret;
 
     if (dev_info.device) {
-      rte_bus *bus = rte_bus_find_by_device(dev_info.device);
-      if (rte_eth_dev_get_name_by_port(dpdk_port_id_, name) == 0) {
+      const rte_bus *bus = rte_bus_find_by_device(dev_info.device);
+      if (bus && rte_eth_dev_get_name_by_port(dpdk_port_id_, name) == 0) {
         rte_eth_dev_close(dpdk_port_id_);
-        ret = rte_eal_hotplug_remove(bus->name, name);
+        ret = rte_eal_hotplug_remove(rte_bus_name(bus), name);
         if (ret < 0) {
           LOG(WARNING) << "rte_eal_hotplug_remove("
                        << static_cast<int>(dpdk_port_id_)
@@ -585,9 +677,6 @@ void PMDPort::DeInit() {
 }
 
 void PMDPort::CollectStats(bool reset) {
-  packet_dir_t dir;
-  queue_t qid;
-
   if (reset) {
     rte_eth_stats_reset(dpdk_port_id_);
     return;
@@ -610,32 +699,16 @@ void PMDPort::CollectStats(bool reset) {
 
   port_stats_.inc.dropped = stats.imissed;
 
-  // ice/i40e/net_e1000_igb PMD drivers, ixgbevf and net_bonding vdevs don't
-  // support per-queue stats
-  if (driver_ == "net_ice" || driver_ == "net_iavf" || driver_ == "net_i40e" ||
-      driver_ == "net_i40e_vf" || driver_ == "net_ixgbe_vf" ||
-      driver_ == "net_bonding" || driver_ == "net_e1000_igb") {
-    // NOTE:
-    // - if link is down, tx bytes won't increase
-    // - if destination MAC address is incorrect, rx pkts won't increase
-    port_stats_.inc.packets = stats.ipackets;
-    port_stats_.inc.bytes = stats.ibytes;
-    port_stats_.out.packets = stats.opackets;
-    port_stats_.out.bytes = stats.obytes;
-  } else {
-    dir = PACKET_DIR_INC;
-    for (qid = 0; qid < num_queues[dir]; qid++) {
-      queue_stats[dir][qid].packets = stats.q_ipackets[qid];
-      queue_stats[dir][qid].bytes = stats.q_ibytes[qid];
-      queue_stats[dir][qid].dropped = stats.q_errors[qid];
-    }
-
-    dir = PACKET_DIR_OUT;
-    for (qid = 0; qid < num_queues[dir]; qid++) {
-      queue_stats[dir][qid].packets = stats.q_opackets[qid];
-      queue_stats[dir][qid].bytes = stats.q_obytes[qid];
-    }
-  }
+  // DPDK 25.11 removed per-queue members (q_ipackets, q_opackets, etc.) from
+  // rte_eth_stats, so aggregate stats are always used.  Per-queue software
+  // histograms and drop accounting are maintained elsewhere in BESS.
+  // NOTE:
+  // - if link is down, tx bytes won't increase
+  // - if destination MAC address is incorrect, rx pkts won't increase
+  port_stats_.inc.packets = stats.ipackets;
+  port_stats_.inc.bytes = stats.ibytes;
+  port_stats_.out.packets = stats.opackets;
+  port_stats_.out.bytes = stats.obytes;
 }
 
 int PMDPort::RecvPackets(queue_t qid, bess::Packet **pkts, int cnt) {
@@ -656,9 +729,9 @@ int PMDPort::SendPackets(queue_t qid, bess::Packet **pkts, int cnt) {
 }
 
 Port::LinkStatus PMDPort::GetLinkStatus() {
-  rte_eth_link status;
+  rte_eth_link status = {};
   // rte_eth_link_get() may block up to 9 seconds, so use _nowait() variant.
-  rte_eth_link_get_nowait(dpdk_port_id_, &status);
+  get_link_status_nowait(dpdk_port_id_, &status);
 
   return LinkStatus{.speed = status.link_speed,
                     .full_duplex = static_cast<bool>(status.link_duplex),

@@ -41,6 +41,7 @@
 #include <rte_eal.h>
 #include <rte_ethdev.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -118,17 +119,24 @@ void init_eal(int dpdk_mb_per_socket, std::string nonworker_corelist) {
       "bessd",
       "--main-lcore",
       std::to_string(RTE_MAX_LCORE - 1),
-      "--lcore",
-      std::to_string(RTE_MAX_LCORE - 1) + "@" + nonworker_corelist,
+      "--lcores",
+      std::to_string(RTE_MAX_LCORE - 1) + "@(" + nonworker_corelist + ")",
       // Do not bother with /var/run/.rte_config and .rte_hugepage_info,
       // since we don't want to interfere with other DPDK applications.
       "--no-shconf",
-      // TODO(sangjin) switch to dynamic memory mode
-      "--legacy-mem",
   };
 
+  // When DPDK is compiled without a built-in plugin directory
+  // (RTE_EAL_PMD_PATH is empty), EAL won't auto-discover bus and net
+  // drivers.  Point it at our PMD directory so that librte_bus_vdev,
+  // librte_net_af_packet, etc. are loaded before any vdev is created.
+  const char *pmd_dir = "/opt/bess/lib/dpdk-pmds";
+  if (access(pmd_dir, R_OK) == 0) {
+    rte_args.Append({"-d", pmd_dir});
+  }
+
   if (FLAGS_iova != "")
-    rte_args.Append({"--iova", FLAGS_iova});
+    rte_args.Append({"--iova-mode", FLAGS_iova});
 
   if (FLAGS_allow != "") {
     LOG(INFO) << "FLAGS_allow value(s): " << FLAGS_allow;
@@ -154,9 +162,25 @@ void init_eal(int dpdk_mb_per_socket, std::string nonworker_corelist) {
     // memory in advance. We allocate 512MB (this is shared among nodes).
     rte_args.Append({"-m", "512"});
   } else {
-    std::string opt_socket_mem = std::to_string(dpdk_mb_per_socket);
-    for (int i = 1; i < NumNumaNodes(); i++) {
-      opt_socket_mem += "," + std::to_string(dpdk_mb_per_socket);
+    const auto &numa_node_ids = NumaNodeIds();
+    const int max_online_node = MaxNumaNodeId();
+    const int max_representable_node = RTE_MAX_NUMA_NODES - 1;
+    const int last_socket_mem_node =
+        std::min(max_online_node, max_representable_node);
+
+    if (std::any_of(numa_node_ids.begin(), numa_node_ids.end(),
+                    [](int node) { return node >= RTE_MAX_NUMA_NODES; })) {
+      LOG(WARNING) << "Ignoring online NUMA node IDs above DPDK limit "
+                   << max_representable_node << " when building --socket-mem";
+    }
+
+    std::string opt_socket_mem;
+    for (int node = 0; node <= last_socket_mem_node; node++) {
+      if (!opt_socket_mem.empty()) {
+        opt_socket_mem += ",";
+      }
+      opt_socket_mem +=
+          std::to_string(IsNumaNodeOnline(node) ? dpdk_mb_per_socket : 0);
     }
 
     rte_args.Append({"--socket-mem", opt_socket_mem});
